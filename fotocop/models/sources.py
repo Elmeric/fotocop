@@ -1,8 +1,12 @@
+import time
 import base64
+
 from typing import Optional, Tuple, List, Union
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from pathlib import Path
+from multiprocessing import Process, Pipe, Event
+from threading import Thread
 
 import wmi
 
@@ -105,9 +109,98 @@ class QtSignalAdapter:
         return getattr(self.qtSignal, self.name)
 
 
+class ImageLoader(Process):
+    def __init__(self, conn, dataPublished: Event):
+        """
+        Create a ImageLoader process instance and save the connection 'conn' to
+        the main process.
+        """
+        super().__init__()
+
+        self.conn = conn
+        self.exitProcess = Event()
+        self.dataPublished = dataPublished
+        self.exifTool = None
+
+    def handleCommand(self):
+        """ polling the ImageLoader connection for task message.
+        A task message is a tuple (action, arg)
+        """
+        # Check for command on the process connection
+        if self.conn.poll():
+            action, arg = self.conn.recv()
+            print(action, arg)
+            if action == 'stop':
+                # Stop the 'main' loop
+                print("Stopping images loader")
+                self.exitProcess.set()
+            elif action == 'load':
+                # Load images
+                path, subDirs = arg
+                print("Loading images...")
+                self.loadImages(Path(path), subDirs)
+
+    def run(self):
+        """ ImageLoader 'main loop'
+        """
+
+        # Start the exiftool process
+        self.exifTool = exiftool.ExifTool()
+        self.exifTool.start()
+
+        self.exitProcess.clear()
+
+        while True:
+            self.handleCommand()
+            if self.exitProcess.wait(timeout=0.1):
+                break
+
+        self.exifTool.terminate()
+
+    def loadImages(self, path: Path, subDirs: bool):
+        walker = path.rglob("*") if subDirs else path.glob("*")
+        batchSize = 3
+        imagesCount = 0
+        batchesCount = 0
+        imagesBatch = list()
+        for f in walker:
+            if self._isImage(f):
+                imagesBatch.append((f.name, f.as_posix()))
+                imagesCount += 1
+                print(f"Found image: {imagesCount} - {f.name}")
+                if imagesCount % batchSize == 0:
+                    batchesCount += 1
+                    print(f"Sending images: batch#{batchesCount}")
+                    self.publishData(batchesCount, imagesBatch)
+                    imagesBatch = list()
+        if imagesBatch:
+            batchesCount += 1
+            print(f"Sending remaining images: batch#{batchesCount}")
+            self.publishData(batchesCount, imagesBatch, end=True)
+
+    @staticmethod
+    def _isImage(path: Path) -> bool:
+        return path.suffix.lower() in (".jpg", ".raf", ".nef", ".dng")
+
+    def publishData(self, batch: int, images: List[Tuple[str, str]], end: bool = False):
+        if batch == 1:
+            header = "START#"
+        elif end:
+            header = "END#"
+        else:
+            header = "CONTINUE#"
+        data = (f"{header}images#{batch}", images)
+        self.conn.send(data)
+        self.dataPublished.set()
+        print(f"Images sent: batch#{batch}")
+
+
 class SourceManager:
 
     sourceSelected = QtSignalAdapter()
+    newImagesBatch = QtSignalAdapter(argsType=(list,))
+    imagesBatchLoaded = QtSignalAdapter(argsType=(list,))
+    imagesLoaded = QtSignalAdapter(argsType=(list,))
 
     def __init__(self):
         self.devices = dict()
@@ -120,6 +213,50 @@ class SourceManager:
 
         self.exifTool = exiftool.ExifTool()
         self.exifTool.start()
+
+        # Start the imageloader process and establish a Pipe connection with it
+        conn, child_conn = Pipe()
+        self.conn = conn
+        self.dataPublished = Event()
+        self.imageLoader = ImageLoader(child_conn, self.dataPublished)
+        self.imageLoader.start()
+        child_conn.close()
+
+        time.sleep(1)
+
+        # Start a thread listening to the imageLoader process messages
+        self.imagesLoaderListener = Thread(daemon=True, target=self.listenImagesLoader, args=())
+        self.imagesLoaderListener.start()
+
+    def listenImagesLoader(self):
+        """ Main loop of the imagesLoaderListener thread, polling message from
+        the ImageLoader process and emitting signal on reception of a message.
+        """
+        # while self.dataPublished.wait():
+        while True:
+            # self.dataPublished.clear()
+            try:
+                if self.conn.poll():
+                    k, v = self.conn.recv()
+                    images = list()
+                    print("Receiving images batch")
+                    header, content, batch = k.split("#")
+                    if content != "images":
+                        continue
+                    images = [Image(name, path) for name, path in v]
+                    if header == "START":
+                        print(f"New batch: {batch} containing {len(images)} images")
+                        self.newImagesBatch.emit(images)
+                    elif header == "END":
+                        print(f"Last batch: {batch} containing {len(images)} images")
+                        self.imagesLoaded.emit(images)
+                    elif header == "CONTINUE":
+                        print(f"Batch: {batch} containing {len(images)} images")
+                        self.imagesBatchLoaded.emit(images)
+            except (EOFError, BrokenPipeError):
+                break
+            # Release CPU usage
+            time.sleep(0.1)
 
     def enumerateSources(self, kind: Tuple[DriveType] = None):
         kind = kind or tuple(DriveType)
@@ -174,6 +311,7 @@ class SourceManager:
             self.selectedDevice = None
             self.sourceType = None
 
+        self.getImages()
         self.sourceSelected.emit()
 
     def selectDrive(self, driveId: str, path: Path, subDirs: bool = False):
@@ -186,12 +324,14 @@ class SourceManager:
             self.selectedDrive = None
             self.sourceType = None
 
+        self.getImages()
         self.sourceSelected.emit()
 
     def setDriveSubDirsState(self, state: bool):
         source, kind = self.getSelectedSource()
         if kind == SourceType.DRIVE:
             source.subDirs = state
+            self.getImages()
             self.sourceSelected.emit()
 
     def setDeviceEjectState(self, state: bool):
@@ -211,18 +351,20 @@ class SourceManager:
             path = self.selectedDrive.selectedPath
             subDirs = self.selectedDrive.subDirs
 
-        if subDirs:
-            images = [
-                Image(f.name, f.as_posix()) for f in path.rglob("*") if self._isImage(f)
-            ]
-            # images = ((f.name, f.as_posix()) for f in path.rglob("*") if self._isImage(f))
-        else:
-            images = [
-                Image(f.name, f.as_posix()) for f in path.glob("*") if self._isImage(f)
-            ]
-            # images = ((f.name, f.as_posix()) for f in path.glob("*") if self._isImage(f))
+        self.conn.send(('load', (path.as_posix(), subDirs)))
 
-        return images
+        # if subDirs:
+        #     images = [
+        #         Image(f.name, f.as_posix()) for f in path.rglob("*") if self._isImage(f)
+        #     ]
+        #     # images = ((f.name, f.as_posix()) for f in path.rglob("*") if self._isImage(f))
+        # else:
+        #     images = [
+        #         Image(f.name, f.as_posix()) for f in path.glob("*") if self._isImage(f)
+        #     ]
+        #     # images = ((f.name, f.as_posix()) for f in path.glob("*") if self._isImage(f))
+        #
+        # return images
 
     def getThumbnail(self, path: str) -> Tuple[Optional[bytes], float, int]:
         try:
@@ -301,6 +443,7 @@ class SourceManager:
         return path.suffix.lower() in (".jpg", ".raf", ".nef", ".dng")
 
     def stopExifTool(self):
+        self.conn.send(('stop', 0))
         self.exifTool.terminate()
 
     @staticmethod

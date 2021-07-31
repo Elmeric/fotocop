@@ -129,7 +129,11 @@ class QtMainView(QtWidgets.QMainWindow):
         self.thumbnailViewer = ThumbnailViewer(self.sourceManager)
 
         self.sourceManager.sourceSelected.connect(self.sourceSelector.selectSource)
-        self.sourceManager.sourceSelected.connect(self.thumbnailViewer.updateImages)
+        # self.sourceManager.sourceSelected.connect(self.sourceManager.getImages)
+        # self.sourceManager.sourceSelected.connect(self.thumbnailViewer.updateImages)
+        self.sourceManager.newImagesBatch.connect(self.thumbnailViewer.newImages)
+        self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
+        self.sourceManager.imagesLoaded.connect(self.thumbnailViewer.imagesLoaded)
 
         # Build the main view layout.
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)

@@ -66,10 +66,12 @@ class ImageModel(QtCore.QAbstractListModel):
             return self.sourceManager.getThumbnail(images[row].path)
 
         if role == QtCore.Qt.ToolTipRole:
-            year, month, day, hour, minute, second = self.sourceManager.getDateTime(
-                images[row].path
-            )
-            return f"{year}{month}{day}-{hour}{minute}{second}"
+            dateTime = self.sourceManager.getDateTime(images[row].path)
+            if dateTime:
+                year, month, day, hour, minute, second = dateTime
+                return f"{year}{month}{day}-{hour}{minute}{second}"
+            else:
+                return None
 
         if role == QtCore.Qt.CheckStateRole:
             if images[row].isSelected:
@@ -95,6 +97,15 @@ class ImageModel(QtCore.QAbstractListModel):
             return True
 
         return False
+
+    def newImages(self, images: List["Image"]):
+        self.beginResetModel()
+        self.images = images
+        self.endResetModel()
+
+    def addImages(self, images: List["Image"], end: bool = False):
+        self.images.extend(images)
+        self.layoutChanged.emit()
 
     def setImages(self, images: List["Image"]):
         self.beginResetModel()
@@ -318,9 +329,18 @@ class ThumbnailViewer(QtWidgets.QWidget):
         layout.addWidget(self.thumbnailView)
         self.setLayout(layout)
 
-    def updateImages(self):
-        images = self.sourceManager.getImages()
-        self.thumbnailView.model().setImages(images)
+    def newImages(self, images):
+        self.thumbnailView.model().newImages(images)
+
+    def addImages(self, images):
+        self.thumbnailView.model().addImages(images)
+
+    def imagesLoaded(self, images):
+        self.thumbnailView.model().addImages(images, end=True)
+
+    # def updateImages(self):
+    #     images = self.sourceManager.getImages()
+    #     self.thumbnailView.model().setImages(images)
 
     def onSelectionChange(
         self, selected: QtCore.QItemSelection, deselected: QtCore.QItemSelection

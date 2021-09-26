@@ -55,7 +55,7 @@ class FotocopSettings(settings.Settings):
 
         super().__init__(self.appDirs.user_data_dir / 'settings')
 
-        self.modelChanged.emit()
+        # self.modelChanged.emit()
 
     def __repr__(self) -> str:
         """A pretty representation of a FotocopSettings.

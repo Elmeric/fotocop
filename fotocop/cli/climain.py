@@ -1,5 +1,6 @@
 """Entry point for the Command Line version of fotocop.
 """
+import fotocop.__about__ as __about__
 from fotocop.util import datatypes as dt
 from fotocop.util import waiting
 
@@ -23,15 +24,15 @@ def _showEndMessage(logFile: str, msg: str, success: bool):
     print('='*len(msg.split('\n')[-1]))
 
 
-def CliMain(version: str, projectPath: str,
-            vcName: str, logLevel: str) -> int:
+def CliMain(projectPath: str,
+            vcName: str,
+            logLevel: str) -> int:
     """Main Command Line Interface entry point.
 
     Loads the project, initializes a session with the given variability
     configuration and log level and runs it.
 
     Args:
-        version: application version.
         projectPath: abslotute path to the project directory.
         vcName: name of a Product Line variability configuration.
         logLevel: logger level.
@@ -39,7 +40,7 @@ def CliMain(version: str, projectPath: str,
     Returns:
         0 for success.
     """
-    msgVersion = f'DCFS Builder {version}'
+    msgVersion = f'DCFS Builder {__about__.__version__}'
     print(msgVersion)
     print('=' * len(msgVersion), '\n')
 

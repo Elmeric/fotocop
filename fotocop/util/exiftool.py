@@ -61,11 +61,14 @@ import os
 import json
 import warnings
 import codecs
+import logging
 
 try:        # Py3k compatibility
     basestring
 except NameError:
     basestring = (bytes, str)
+
+logger = logging.getLogger(__name__)
 
 executable = "exiftool"
 """The name of the executable to run.
@@ -174,6 +177,7 @@ class ExifTool(object):
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=devnull)
         self.running = True
+        logger.info("ExifTool started")
 
     def terminate(self):
         """Terminate the ``exiftool`` process of this instance.
@@ -187,6 +191,7 @@ class ExifTool(object):
         self._process.communicate()
         del self._process
         self.running = False
+        logger.info("ExifTool stopped")
 
     def __enter__(self):
         self.start()

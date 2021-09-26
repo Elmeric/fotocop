@@ -11,12 +11,9 @@ Usage:
 """
 __all__ = ['run_main']
 
-__version__ = '1.0'
-
 import sys
 import logging
 import argparse
-from pathlib import Path
 
 from fotocop.cli import climain as cli
 from fotocop.gui import guimain as gui
@@ -73,7 +70,7 @@ def run_main():
         main = gui.QtMain
 
     try:
-        sys.exit(main(__version__, **kwargs))
+        sys.exit(main(**kwargs))
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.fatal('Fatal error!', exc_info=True)

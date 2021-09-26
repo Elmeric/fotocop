@@ -19,7 +19,7 @@ It provides:
     - A stack of toolbars where only one toolbar is visible at a time.
     - A basic textual filter input widget.
 """
-from typing import Dict, Callable, Optional, Union, List
+from typing import Dict, Callable, Optional, Union, List, Any
 from enum import Enum, auto
 from pathlib import Path
 
@@ -159,7 +159,35 @@ def getMainWindow() -> QtWidgets.QMainWindow:
     raise ValueError('No Main Window found!')
 
 
-class DcsfStyle(QtWidgets.QProxyStyle):
+def standardFontSize(shrinkOnOdd: bool = True) -> int:
+    h = QtGui.QFontMetrics(QtGui.QFont()).height()
+    if h % 2 == 1:
+        if shrinkOnOdd:
+            h -= 1
+        else:
+            h += 1
+    return h
+
+
+def scaledIcon(path: str, size: Optional[QtCore.QSize] = None) -> QtGui.QIcon:
+    """Create a QIcon that scales well.
+
+    Args:
+        path: path to the icon file.
+        size: target size for the icon.
+
+    Returns:
+        The scaled icon
+    """
+    i = QtGui.QIcon()
+    if size is None:
+        s = standardFontSize()
+        size = QtCore.QSize(s, s)
+    i.addFile(path, size)
+    return i
+
+
+class MyAppStyle(QtWidgets.QProxyStyle):
     """A QProxyStyle specialization to adjust some default style settings.
 
     Increase the default small icon size with 4 pixels.
@@ -1676,3 +1704,32 @@ class HistoryBrowser(QtWidgets.QWidget):
             else:
                 a.setVisible(True)
                 a.setIcon(self._activeIcon)
+
+
+class QtSignalAdapter:
+    def __init__(self, *argsType: Any, name: str = None):
+        super().__init__()
+
+        self.signalName = name
+
+        self.argsType = argsType
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+        if self.signalName is None:
+            self.signalName = name
+
+        QtSignal = type(
+            "QtSignal",
+            (QtCore.QObject,),
+            {
+                f"{self.name}": QtCore.pyqtSignal(*self.argsType, name=self.signalName),
+            },
+        )
+        self.qtSignal = QtSignal()
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        return getattr(self.qtSignal, self.name)

@@ -3,6 +3,11 @@
 import sys
 import os
 import time
+import logging
+import logging.handlers
+import threading
+from typing import Union
+from multiprocessing import Queue, Process
 from pathlib import Path
 
 import PyQt5.QtCore as QtCore
@@ -11,6 +16,8 @@ import PyQt5.QtGui as QtGui
 
 import wmi
 
+import fotocop.__about__ as __about__
+from fotocop.util.logutil import LogConfig
 from fotocop.util import datatypes as dt
 from fotocop.util import qtutil as QtUtil
 
@@ -35,6 +42,8 @@ from .thumbnailviewer import ThumbnailViewer
 
 
 __all__ = ["QtMain"]
+
+logger = logging.getLogger(__name__)
 
 
 class QtMainView(QtWidgets.QMainWindow):
@@ -77,40 +86,18 @@ class QtMainView(QtWidgets.QMainWindow):
         status (QStatusBar): reference to the Main window status bar.
     """
 
-    def __init__(self, version: str, splash, *args, **kwargs):
+    def __init__(self, splash, logConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        msg = f"  {version}\n  Loading gui objects..."
-        splash.showMessage(msg, QtCore.Qt.AlignBottom)
-        # time.sleep(0.5)
+        splash.setProgress(10)
 
-        self.version = version
         self.splash = splash
-        self.project = None
 
         resources = Config.fotocopSettings.resources
         selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
-        # devices = list()
-        # disks = list()
-        # c = wmi.WMI()
-        # for disk in c.Win32_LogicalDisk():
-        #     if disk.DriveType in (2, 3, 4, 5) and disk.FileSystem:
-        #         name = disk.ProviderName or disk.VolumeName or disk.Description
-        #         caption = f'{name} ({disk.DeviceId})'
-        #         disks.append(caption)
-        #         if disk.DriveType == 2:
-        #             devices.append(caption)
-
-        # Initialize the edit actions handler.
-        # self.globalActions = GlobalActionHelper(self)
-
-        # Initialize the app's editor views. Init order to comply with the
-        # editors' dependencies.
-        # self.vcsController = VcsController(parent=self)
-        # self.sourceBrowser = SourceBrowser(parent=self)
-        # self.destBrowser = DestBrowser(parent=self)
-        self.sourceManager = SourceManager()
+        # Initialize the app's views. Init order to comply with the editors' dependencies.
+        self.sourceManager = SourceManager(logConfig)
         self.sourceSelector = SourceSelector(self.sourceManager)
         self.destSelector = QtUtil.DirectorySelector(
             label="Destination folder:",
@@ -123,17 +110,14 @@ class QtMainView(QtWidgets.QMainWindow):
             defaultPath="",
             parent=self,
         )
-        # self.destSelector.pathSelected.connect(self.checkDest)
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
-        # self.thumbnailViewer = QtWidgets.QWidget(parent=self)
         self.thumbnailViewer = ThumbnailViewer(self.sourceManager)
 
-        self.sourceManager.sourceSelected.connect(self.sourceSelector.selectSource)
-        # self.sourceManager.sourceSelected.connect(self.sourceManager.getImages)
-        # self.sourceManager.sourceSelected.connect(self.thumbnailViewer.updateImages)
-        self.sourceManager.newImagesBatch.connect(self.thumbnailViewer.newImages)
+        self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
+        self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
         self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
-        self.sourceManager.imagesLoaded.connect(self.thumbnailViewer.imagesLoaded)
+
+        splash.setProgress(30)
 
         # Build the main view layout.
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -146,10 +130,7 @@ class QtMainView(QtWidgets.QMainWindow):
         horzSplitter.setStretchFactor(0, 1)
         horzSplitter.setStretchFactor(1, 2)
         horzSplitter.setStretchFactor(2, 1)
-        # horzSplitter.setOpaqueResize(False)
-        # vertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        # vertSplitter.addWidget(horzSplitter)
-        # vertSplitter.addWidget(self.consoleView)
+        horzSplitter.setOpaqueResize(False)
 
         self.setCentralWidget(horzSplitter)
 
@@ -168,13 +149,13 @@ class QtMainView(QtWidgets.QMainWindow):
         #     self, "&Save", slot=self.saveProject,
         #     shortcut=QtGui.QKeySequence.Save, icon=f'{resources}/filesave.png',
         #     tip="Save the DCFS project")
-        # helpAboutAction = QtUtil.createAction(
-        #     self, "&About", slot=self.helpAbout, tip="About the application",
-        #     icon=f'{resources}/info.png')
-        # settingsAction = QtUtil.createAction(
-        #     self, "Se&ttings", slot=self.adjustSettings,
-        #     shortcut="Ctrl+Alt+S", icon=f'{resources}/settings.png',
-        #     tip="Adjust application settings")
+        helpAboutAction = QtUtil.createAction(
+            self, "&About", slot=self.helpAbout, tip="About the application",
+            shortcut="Ctrl+?", icon=f'{resources}/info.png')
+        settingsAction = QtUtil.createAction(
+            self, "Se&ttings", slot=self.adjustSettings,
+            shortcut="Ctrl+Alt+S", icon=f'{resources}/settings.png',
+            tip="Adjust application settings")
         # showConsoleAction = QtUtil.createAction(
         #     self, "Show", slot=self.toggleConsole,
         #     shortcut="Alt+C", tip="Show last messages")
@@ -182,14 +163,15 @@ class QtMainView(QtWidgets.QMainWindow):
         #     self, "Start", slot=self.startBuilder,
         #     shortcut="CTRL+G", icon=QtGui.QIcon(f'{resources}/start.png'),
         #     tip="Generate DCFS XML file")
-        # QtWidgets.QShortcut(
-        #     QtGui.QKeySequence('CTRL+Q'),
-        #     self,
-        #     self.close                                                  # noqa
-        # )
+        QtWidgets.QShortcut(
+            QtGui.QKeySequence('CTRL+Q'),
+            self,
+            self.close                                                  # noqa
+        )
 
         # The session toolbar content:
-        # iconSize = QtCore.QSize(40, 40)
+        iconSize = QtCore.QSize(40, 40)
+
         # workingVarConfLabel = QtWidgets.QLabel()
         # workingVarConfLabel.setPixmap(QtGui.QPixmap(f'{resources}/work.png'))
         # self.workingVarConfSelector = QtWidgets.QComboBox()
@@ -201,10 +183,10 @@ class QtMainView(QtWidgets.QMainWindow):
         # self.workingVarConfSelector.currentTextChanged.connect(self.selectVarConf)
 
         # To right-align the help toolbar.
-        # spacer = QtWidgets.QWidget(self)
-        # spacer.setSizePolicy(
-        #     QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
-        # )
+        spacer = QtWidgets.QWidget(self)
+        spacer.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
+        )
 
         # Build the main toolbars in the right order.
         # projectToolbar = self.addToolBar("Project tools")
@@ -227,13 +209,13 @@ class QtMainView(QtWidgets.QMainWindow):
         # sessionToolbar.addWidget(workingVarConfLabel)
         # sessionToolbar.addWidget(self.workingVarConfSelector)
         # sessionToolbar.addAction(self.startAction)
-        #
-        # helpToolbar = self.addToolBar("Help tools")
+
+        helpToolbar = self.addToolBar("Help tools")
         # helpToolbar.setIconSize(iconSize)
-        # helpToolbar.addWidget(spacer)
-        # helpToolbar.addAction(settingsAction)
-        # helpToolbar.addSeparator()
-        # helpToolbar.addAction(helpAboutAction)
+        helpToolbar.addWidget(spacer)
+        helpToolbar.addAction(settingsAction)
+        helpToolbar.addSeparator()
+        helpToolbar.addAction(helpAboutAction)
 
         # Build the status bar and its button to show the console view.
         # self.consoleButton = QtWidgets.QToolButton()
@@ -244,56 +226,25 @@ class QtMainView(QtWidgets.QMainWindow):
         # self.status.addPermanentWidget(self.consoleButton)
         # self.status.messageChanged.connect(self.onStatusChanged)  # noqa
 
-        # self.vcsController.vcsHeadChanged.connect(self.reloadProject)
+        splash.setProgress(50)
 
         QtCore.QTimer.singleShot(0, self.initUI)
 
     def initUI(self):
-        """Intialize the main window to its last position, with the last project.
-
-        Update the Main window with the new project information and the last
-        variability configuration.
-        If there is no last project, call the open project dialog.
+        """Intialize the main window to its last position.
 
         Called on an immediate timer once the main windows is built.
         """
         # self.hideConsole()
 
-        msg = f"  {self.version}\n  Loading previous settings..."
-        self.splash.showMessage(msg, QtCore.Qt.AlignBottom)
+        self.splash.setProgress(70)
 
         settings = Config.fotocopSettings
 
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
 
-        # lastProject = settings.lastProject
-        # if lastProject:
-        #     cmdReport, project = projectCreator.getProject(
-        #         lastProject,
-        #         onProjectChanged=self.updateUI
-        #     )
-        #     if project:
-        #         self.project = project
-        #         # A modelChanged signal can be used as the UI is not yet
-        #         # configured with the new opened project
-        #         self.updateUI(dt.ProjectChange.NEW)
-        #         lastVarConf = settings.lastVarConf
-        #         if lastVarConf:
-        #             self.workingVarConfSelector.setCurrentText(lastVarConf)
-        #     else:
-        #         self.projectSaveAction.setEnabled(False)
-        #         self.startAction.setEnabled(False)
-        #         # self.vcsController.setEnabled(False)
-        #         self.vcsController.setVcsRepo(None)
-        #
-        #     self.showCommandReport(cmdReport)
-        #
-        # else:
-        #     self.projectSaveAction.setEnabled(False)
-        #     self.startAction.setEnabled(False)
-        #     self.vcsController.setVcsRepo(None)
-        #     QtCore.QTimer.singleShot(50, self.openProject)
+        self.splash.setProgress(100)
 
     @QtCore.pyqtSlot(str)
     def onStatusChanged(self, msg: str):
@@ -369,61 +320,70 @@ class QtMainView(QtWidgets.QMainWindow):
         Returns:
             True if action is authorized, False otherwise.
         """
-        if self.project and self.project.isValid and self.project.isDirty:
-            reply = QtWidgets.QMessageBox.question(
-                self,  # noqa
-                f"{QtWidgets.qApp.applicationName()} - Unsaved Changes",
-                "Save project changes?",
-                (
-                    QtWidgets.QMessageBox.Yes
-                    | QtWidgets.QMessageBox.No
-                    | QtWidgets.QMessageBox.Cancel
-                ),
-            )  # noqa
-            if reply == QtWidgets.QMessageBox.Cancel:
-                return False
-            elif reply == QtWidgets.QMessageBox.Yes:
-                return self.saveProject()
+        # if self.project and self.project.isValid and self.project.isDirty:
+        #     reply = QtWidgets.QMessageBox.question(
+        #         self,  # noqa
+        #         f"{QtWidgets.qApp.applicationName()} - Unsaved Changes",
+        #         "Save project changes?",
+        #         (
+        #             QtWidgets.QMessageBox.Yes
+        #             | QtWidgets.QMessageBox.No
+        #             | QtWidgets.QMessageBox.Cancel
+        #         ),
+        #     )  # noqa
+        #     if reply == QtWidgets.QMessageBox.Cancel:
+        #         return False
+        #     elif reply == QtWidgets.QMessageBox.Yes:
+        #         return self.saveProject()
         return True
 
-    # @QtCore.pyqtSlot()
-    # def adjustSettings(self):
-    #     """Show the DCFS settings dialog.
-    #
-    #     If dialog is accepted, the settings changes are saved.
-    #     """
-    #     form = SettingsView(parent=self)
-    #     if form.exec_():
-    #         Config.fotocopSettings.save()
+    @QtCore.pyqtSlot()
+    def adjustSettings(self):
+        """Show the DCFS settings dialog.
 
-    # @QtCore.pyqtSlot()
-    # def helpAbout(self):
-    #     """Show the DCFS 'About' dialog.
-    #     """
-    #     resources = Config.fotocopSettings.resources
-    #     QtWidgets.QMessageBox.about(
-    #         self,  # noqa
-    #         f'{QtWidgets.qApp.applicationName()} - About',
-    #         f"""
-    #         <b>{QtWidgets.qApp.applicationName()}</b> {self.version}
-    #         <p>Edit your DCFS project configuration, select a variability
-    #         configuration and generate the corresponding DCFS XML file.</p>
-    #         <br>
-    #         <p>Designed and develop by Eric Lemoine</p>
-    #         <p>
-    #         Powered by
-    #         <a href="https://www.python.org/">
-    #         <img style="vertical-align:middle" src="{resources}/pythonlogo.svg" alt="Powered by Python" height="32"></a>
-    #          and
-    #         <a href="https://www.qt.io/">
-    #         <img style="vertical-align:middle" src="{resources}/qtlogo.svg" alt="Powered by Qt" height="32"></a>
-    #         </p>
-    #         <p>
-    #         Icons selection from icons8.com <a href="https://icons8.com">
-    #         <img style="vertical-align:middle" src="{resources}/icons8.png" alt="icons8.com" height="32"></a>
-    #         </p>
-    #         """
-    #     )  # noqa
+        If dialog is accepted, the settings changes are saved.
+        """
+        pass
+        # form = SettingsView(parent=self)
+        # if form.exec_():
+        #     Config.fotocopSettings.save()
+
+    @QtCore.pyqtSlot()
+    def helpAbout(self):
+        """Show the DCFS 'About' dialog.
+        """
+        pass
+        resources = Config.fotocopSettings.resources
+        appName = __about__.__title__
+        QtWidgets.QMessageBox.about(
+            self,  # noqa
+            f'{appName} - About',
+            f"""
+            <p><b>{appName}</b> {__about__.__version__}</p>
+            <p>{__about__.__summary__}.</p>
+            <br>
+            <p>
+            Designed and develop by {__about__.__author__}
+            ({__about__.__email__})
+            </p>
+            <p>
+            Under {__about__.__license__} license - {__about__.__copyright__}
+            </p>
+            <br>
+            <p>
+            Powered by
+            <a href="https://www.python.org/">
+            <img style="vertical-align:middle" src="{resources}/pythonlogo.svg" alt="Powered by Python" height="32"></a>
+             and
+            <a href="https://www.qt.io/">
+            <img style="vertical-align:middle" src="{resources}/qtlogo.svg" alt="Powered by Qt" height="32"></a>
+            </p>
+            <p>
+            Icons selection from icons8.com <a href="https://icons8.com">
+            <img style="vertical-align:middle" src="{resources}/icons8.png" alt="icons8.com" height="32"></a>
+            </p>
+            """
+        )  # noqa
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
         """Trap the Escape key to close the close the application.
@@ -476,89 +436,102 @@ class QtMainView(QtWidgets.QMainWindow):
             # Saving fotocopSettings OK or reply = QMessageBox.Yes: accept dialog close event
             # else:
             #     self.closeProject()
-            self.sourceManager.stopExifTool()
+            self.sourceManager.close()
         else:
             event.ignore()
 
 
-def QtMain(version: str = ""):
+class SplashScreen(QtWidgets.QSplashScreen):
+    def __init__(self, pixmap: QtGui.QPixmap, flags) -> None:
+        super().__init__(pixmap, flags)
+        self.progress = 0
+        try:
+            self.imageWidth = pixmap.width() / pixmap.devicePixelRatioF()
+        except AttributeError:
+            self.imageWidth = pixmap.width() / pixmap.devicePixelRatio()
+
+        self.progressBarPen = QtGui.QPen(QtGui.QBrush(QtGui.QColor(QtCore.Qt.green)), 5.0)
+
+    def drawContents(self, painter: QtGui.QPainter):
+        painter.save()
+        painter.setPen(QtGui.QColor(QtCore.Qt.black))
+        painter.drawText(12, 60, __about__.__version__)
+        if self.progress:
+            painter.setPen(self.progressBarPen)
+            x = int(self.progress / 100 * self.imageWidth)
+            painter.drawLine(0, 360, x, 360)
+        painter.restore()
+
+    def setProgress(self, value: int) -> None:
+        """Update the splash screen progress bar
+
+        Args:
+             value: percent done, between 0 and 100
+        """
+        self.progress = value
+        # time.sleep(0.2)
+        self.repaint()
+
+
+def QtMain():
     """Main Graphical Interface entry point.
 
-    Retrieves settings, initiatizes a Qt Application and the application main
-    view.
+    Retrieves settings, initiatizes the whole application logging. Then initializes
+    a Qt Application and the application main view.
     Display a splash screen during application initialization and start the
     Qt main loop.
-
-    Args:
-        version: application version.
     """
-    c = wmi.WMI()
-
-    # for drive in c.Win32_DiskDrive():
-    for drive in c.Win32_DiskDrive(InterfaceType="USB"):
-        # for drive in c.Win32_DiskDrive(InterfaceType='USB', MediaType = "Removable Media"):
-        print(drive)
-        for part in drive.associators("Win32_DiskDriveToDiskPartition"):
-            # print(part)
-            for logicalDisk in part.associators("Win32_LogicalDiskToPartition"):
-                print(logicalDisk.DeviceId, logicalDisk.VolumeName)
-                # print(logicalDisk)
-
-    # https://docs.microsoft.com/fr-fr/windows/win32/wmisdk/wmi-tasks--disks-and-file-systems
-    # https://stackoverflow.com/questions/123927/how-to-find-usb-drive-letter
-    for disk in c.Win32_LogicalDisk():
-        # for disk in c.Win32_LogicalDisk(DriveType=2):
-        if disk.DriveType in (2, 3, 4, 5) and disk.FileSystem:
-            name = disk.ProviderName or disk.VolumeName or disk.Description
-            caption = f"{name} ({disk.DeviceId})"
-            print(caption)
-            # print(disk.Caption, disk.Description)
-            # print(disk)
-
     # Retrieve the fotocop app settings.
     settings = Config.fotocopSettings
     resources = settings.resources
 
+    logFile = settings.appDirs.user_log_dir / "fotocop.log"
+    logConfig = LogConfig(
+        logFile,
+        settings.logLevel,
+        logOnConsole=True,
+    )
+    logConfig.initLogging()
+
+    logger.info("Fotocop is starting...")
+
     # QT_SCALE_FACTOR environment variable allow to zoom the HMI for better.
     # readability
-    # if "QT_SCALE_FACTOR" not in os.environ:
-    #     os.environ["QT_SCALE_FACTOR"] = settings.qtScaleFactor
+    if "QT_SCALE_FACTOR" not in os.environ:
+        os.environ["QT_SCALE_FACTOR"] = settings.qtScaleFactor
 
     # Initialize the Application, apply a custom style, set the app's icon and
     # increase the default font size.
     app = QtWidgets.QApplication(sys.argv)
-    app.setStyle(QtUtil.DcsfStyle())
+    app.setStyle(QtUtil.MyAppStyle())
     app.setStyleSheet("QSplitter::handle { background-color: gray }")
     app.setApplicationName("Fotocop")
     app.setAttribute(QtCore.Qt.AA_DisableWindowContextHelpButton)  # noqa
-    app.setWindowIcon(QtGui.QIcon(f"{resources}/appicon.svg"))
+    app.setWindowIcon(QtGui.QIcon(f"{resources}/fotocop.svg"))
     f = app.font()
     fSize = f.pointSize()
     f.setPointSize(fSize + 2)
     app.setFont(f)
 
     # Build and show the splash screen.
-    # splashDelay = 0.9
-    splash = QtWidgets.QSplashScreen(
-        QtGui.QPixmap(f"{resources}/splash.png"), QtCore.Qt.WindowStaysOnTopHint
-    )
-    splash.setEnabled(False)
+    # Use QIcon to render so we get the high DPI version automatically
+    size = QtCore.QSize(600, 400)
+    pixmap = QtUtil.scaledIcon(f"{resources}/splashscreen600.png", size).pixmap(size)
+    splash = SplashScreen(pixmap, QtCore.Qt.WindowStaysOnTopHint)
     splash.show()
-
-    # msg = f'  {version}\n  Loading previous settings...'
-    # splash.showMessage(msg, QtCore.Qt.AlignBottom)
-    # time.sleep(splashDelay / 2)
+    # app.processEvents()
 
     # Build and show the main view after the splash screen delay.
-    # msg = f'  {version}\n  Loading gui objects...'
-    # splash.showMessage(msg, QtCore.Qt.AlignBottom)
-    mainView = QtMainView(version, splash)
-    # time.sleep(splashDelay / 2)
+    mainView = QtMainView(splash, logConfig)
     splash.finish(mainView)
     mainView.show()
 
     # Start the Qt main loop.
     app.exec_()
+
+    logger.info("Fotocop is closing...")
+
+    logConfig.stopLogging()
 
 
 if __name__ == "__main__":

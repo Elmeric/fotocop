@@ -236,7 +236,7 @@ class Setting(object):
             value: the value to set.
         """
         instance.setValue(self.key, value)
-        instance.modelChanged.emit()
+        # instance.modelChanged.emit()
 
 
 class WinAppDirs(NamedTuple):

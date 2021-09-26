@@ -8,7 +8,7 @@ import PyQt5.QtGui as QtGui
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.collapsiblewidget import CollapsibleWidget
 from fotocop.models import settings as Config
-from fotocop.models.sources import SourceType, DriveType
+from fotocop.models.sources import SourceType, DriveType, Selection
 
 if TYPE_CHECKING:
     from fotocop.models.sources import SourceManager
@@ -27,10 +27,17 @@ class SourceSelector(QtWidgets.QWidget):
         refreshTip = "Refresh devices and files source lists"
 
         self.sourcePix = QtWidgets.QLabel()
+        self.sourcePix.setPixmap(
+            QtGui.QPixmap(f"{resources}/double-down.png").scaledToHeight(
+                48, QtCore.Qt.SmoothTransformation
+            )
+        )
         self.sourceLbl = QtWidgets.QLabel("Select a source")
         self.sourceLbl.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.sourceLbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         self.sourceLbl.setFixedWidth(350)
+        self.sourceLbl.setText("Select a source")
+        self.sourceLbl.setToolTip("")
 
         deviceLbl = QtWidgets.QLabel("DEVICES")
         deviceLbl.setMaximumHeight(24)
@@ -40,6 +47,7 @@ class SourceSelector(QtWidgets.QWidget):
         refreshDevBtn.setFlat(True)
         self.ejectChk = QtWidgets.QCheckBox("Eject after copy")
         self.ejectChk.setChecked(False)
+        self.ejectChk.stateChanged.connect(self.onEjectSelection)
         self.noDeviceLbl = QtWidgets.QLabel("Insert a device and refresh list")
         self.devicesLst = QtWidgets.QListWidget()
         self.devicesLst.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -220,11 +228,12 @@ class SourceSelector(QtWidgets.QWidget):
         path = Path(model.filePath(index))
         self.sourceManager.selectDrive(selectedDrive, path, self.subDirsChk.isChecked())
 
-    @QtCore.pyqtSlot()
-    def selectSource(self):
+    @QtCore.pyqtSlot(Selection)
+    def onSourceSelected(self, selection: Selection):
         resources = Config.fotocopSettings.resources
 
-        source, kind = self.sourceManager.getSelectedSource()
+        source = selection.source
+        kind = selection.kind
 
         if kind == SourceType.DEVICE:
             caption = source.caption

@@ -1,11 +1,11 @@
-from typing import TYPE_CHECKING, Any, Tuple, List
-from pathlib import Path
+import logging
+from typing import TYPE_CHECKING, Any, List
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
-from fotocop.models import settings as Config
+from fotocop.models.sources import Selection
 
 if TYPE_CHECKING:
     from fotocop.models.sources import SourceManager, Image
@@ -20,8 +20,8 @@ CELL_MARGIN = 2
 CELL_IN_WIDTH = 160
 CELL_IN_HEIGHT = 190
 CELL_IN_MARGIN = (CELL_IN_WIDTH - THUMB_WIDTH) / 2
-CELL_WIDTH = CELL_IN_WIDTH + 2 * CELL_MARGIN
-CELL_HEIGHT = CELL_IN_HEIGHT + 2 * CELL_MARGIN
+CELL_WIDTH = CELL_IN_WIDTH + 2*CELL_MARGIN
+CELL_HEIGHT = CELL_IN_HEIGHT + 2*CELL_MARGIN
 THUMB_MARGIN = (CELL_IN_WIDTH - THUMB_HEIGHT) / 2
 
 
@@ -44,11 +44,6 @@ class ImageModel(QtCore.QAbstractListModel):
         if index.isValid():
             return super().flags(index) | QtCore.Qt.ItemIsUserCheckable
         return super().flags(index)
-        # return (
-        #     QtCore.Qt.ItemIsEnabled
-        #     | QtCore.Qt.ItemIsSelectable
-        #     | QtCore.Qt.ItemIsUserCheckable
-        # )
 
     def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.DisplayRole) -> Any:
         if not index.isValid():
@@ -75,15 +70,15 @@ class ImageModel(QtCore.QAbstractListModel):
 
         if role == QtCore.Qt.CheckStateRole:
             if images[row].isSelected:
-                print(f"    > {images[row].name} is checked")
                 return QtCore.Qt.Checked
             else:
-                print(f"    > {images[row].name} is unchecked")
                 return QtCore.Qt.Unchecked
 
         return None
 
-    def setData(self, index: QtCore.QModelIndex, value: Any, role: int = QtCore.Qt.EditRole):
+    def setData(
+        self, index: QtCore.QModelIndex, value: Any, role: int = QtCore.Qt.EditRole
+    ) -> bool:
         if not index.isValid():
             return False
 
@@ -98,35 +93,17 @@ class ImageModel(QtCore.QAbstractListModel):
 
         return False
 
-    def newImages(self, images: List["Image"]):
+    def clearImages(self):
         self.beginResetModel()
-        self.images = images
+        self.images = list()
         self.endResetModel()
 
-    def addImages(self, images: List["Image"], end: bool = False):
+    def addImages(self, images: List["Image"]):
         self.images.extend(images)
         self.layoutChanged.emit()
 
-    def setImages(self, images: List["Image"]):
-        self.beginResetModel()
-        self.images = images
-        self.endResetModel()
-
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
-    # t1 = QtCore.pyqtSignal(str, str, dict)
-
-    def __init__(self, parent=None):
-        # def __init__(self, image_cache, loader_thread, parent=None):
-        super().__init__(parent)
-        # self.imageCache = imageCache
-        # resources = Config.fotocopSettings.resources
-        # self.placeholder_image = QtGui.QPixmap(f"{resources}/dummy-image.png").scaled(
-        #     160, 120
-        # )
-        # self.image_cache = image_cache
-        # self.loader_thread = loader_thread
-        # self.t1.connect(self.loader_thread.insert_into_queue)
 
     def paint(self, painter, option, index):
         imageName = index.data(QtCore.Qt.DisplayRole)
@@ -185,21 +162,14 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         textRect = QtCore.QRect(
             cellLeft, cellTop + CELL_IN_WIDTH, CELL_IN_WIDTH, CAPTION_HEIGHT
         )
-
-        # try:
-        #     cachedThumb = self.image_cache[imageName]
-        #     print("Got image: {} from cache".format(imageName)
-        # except KeyError as e:
-        #     self.t1.emit(imageName, imageThumb, self.image_cache)
-        #     cachedThumb = self.placeholder_image
-        #     print("Drawing placeholder image for {}".format(imageName)
+        cellRect = QtCore.QRect(cellLeft, cellTop, CELL_IN_WIDTH, CELL_IN_HEIGHT)
 
         defaultPen = painter.pen()
 
-        painter.fillRect(
-            QtCore.QRect(cellLeft, cellTop, CELL_IN_WIDTH, CELL_IN_HEIGHT),
-            QtGui.QColor("lightgray"),
-        )
+        state = index.data(QtCore.Qt.CheckStateRole)
+        bgdColor = QtGui.QColor("aliceblue") if state == QtCore.Qt.Checked else QtGui.QColor("lightgray")
+
+        painter.fillRect(cellRect, bgdColor)
 
         painter.drawPixmap(target, px, source)
         painter.drawText(textRect, QtCore.Qt.AlignCenter, imageName)
@@ -208,34 +178,26 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         painter.setPen(pen)
         painter.drawRect(target)
 
-        painter.drawRect(cellLeft, cellTop, CELL_IN_WIDTH, CELL_IN_HEIGHT)
+        painter.drawRect(cellRect)
 
         if option.state & QtWidgets.QStyle.State_Selected:
-            pen = QtGui.QPen(QtGui.QColor("white"), 3)
+            pen = QtGui.QPen(QtGui.QColor("yellow"), 3)
             painter.setPen(pen)
             painter.drawRect(target)
-            # highlight_color = option.palette.highlight().color()
-            # highlight_color.setAlpha(50)
-            # highlight_brush = QtGui.QBrush(highlight_color)
-            # painter.fillRect(
-            #     QtCore.QRect(cellLeft, cellTop, CELL_IN_WIDTH, CELL_IN_HEIGHT),
-            #     highlight_brush,
-            # )
 
         painter.setPen(defaultPen)
 
         # Checkstate
         # https://stackoverflow.com/questions/57793643/position-qcheckbox-top-left-of-item-in-qlistview
-        value = index.data(QtCore.Qt.CheckStateRole)
-        if value is not None:
+        if state is not None:
             opt = QtWidgets.QStyleOptionViewItem()
-            opt.rect = self.getCheckboxRect(option)
+            opt.rect = self.getCheckboxRect(option.rect)
             opt.state = opt.state & ~QtWidgets.QStyle.State_HasFocus
-            if value == QtCore.Qt.Unchecked:
+            if state == QtCore.Qt.Unchecked:
                 opt.state |= QtWidgets.QStyle.State_Off
-            elif value == QtCore.Qt.PartiallyChecked:
+            elif state == QtCore.Qt.PartiallyChecked:
                 opt.state |= QtWidgets.QStyle.State_NoChange
-            elif value == QtCore.Qt.Checked:
+            elif state == QtCore.Qt.Checked:
                 opt.state = QtWidgets.QStyle.State_On
             style = QtWidgets.QApplication.style()
             style.drawPrimitive(
@@ -251,11 +213,10 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         ):
             return False
 
-        value = index.data(QtCore.Qt.CheckStateRole)
-        if value is None:
+        state = index.data(QtCore.Qt.CheckStateRole)
+        if state is None:
             return False
 
-        style = QtWidgets.QApplication.style()
         if event.type() in (
             QtCore.QEvent.MouseButtonRelease,
             QtCore.QEvent.MouseButtonDblClick,
@@ -263,7 +224,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         ):
             viewOpt = QtWidgets.QStyleOptionViewItem(option)
             self.initStyleOption(viewOpt, index)
-            checkRect = self.getCheckboxRect(viewOpt)
+            checkRect = self.getCheckboxRect(viewOpt.rect)
             if event.button() != QtCore.Qt.LeftButton or not checkRect.contains(
                 event.pos()
             ):
@@ -272,24 +233,31 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
                 QtCore.QEvent.MouseButtonPress,
                 QtCore.QEvent.MouseButtonDblClick,
             ):
-                return True
+                # Pass event forward to handle normal item selection
+                return False
         elif event.type() == QtCore.QEvent.KeyPress:
             if event.key() not in (QtCore.Qt.Key_Space, QtCore.Qt.Key_Select):
                 return False
         else:
             return False
-        state = value
+
+        # Left mouse button released in the checkbox rect or space key pressed:
+        # change the checkbox state.
         if flags & QtCore.Qt.ItemIsTristate:
             state = QtCore.Qt.CheckState((state + 1) % 3)
         else:
             state = (
                 QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
             )
-        return model.setData(index, state, QtCore.Qt.CheckStateRole)
+        model.setData(index, state, QtCore.Qt.CheckStateRole)
+        if event.type() == QtCore.QEvent.KeyPress:
+            return False
+        else:
+            return True
 
     @staticmethod
-    def getCheckboxRect(option):
-        return QtCore.QRect(4, 4, 18, 18).translated(option.rect.topLeft())
+    def getCheckboxRect(rect: QtCore.QRect) -> QtCore.QRect:
+        return QtCore.QRect(4, 4, 18, 18).translated(rect.topLeft())
 
     def sizeHint(self, QStyleOptionViewItem, QModelIndex):
         return QtCore.QSize(CELL_WIDTH, CELL_HEIGHT)
@@ -301,8 +269,10 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.sourceManager = sourceManager
 
+        self.logger = logging.getLogger(__name__)
+
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
-        self.thumbnailView = QtWidgets.QListView()
+        self.thumbnailView = ThumbnailView()
         self.thumbnailView.setViewMode(QtWidgets.QListView.IconMode)
         self.thumbnailView.setWrapping(True)
         self.thumbnailView.setMovement(QtWidgets.QListView.Static)
@@ -321,40 +291,153 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.thumbnailView.setItemDelegate(ThumbnailDelegate())
 
-        # self.thumbnailView.selectionModel().selectionChanged.connect(
-        #     self.onSelectionChange
-        # )
+        self.allBtn = QtWidgets.QPushButton("All")
+        self.noneBtn = QtWidgets.QPushButton("None")
+
+        hlayout = QtWidgets.QHBoxLayout()
+        hlayout.addWidget(self.allBtn)
+        hlayout.addWidget(self.noneBtn)
+        hlayout.addStretch()
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self.thumbnailView)
+        layout.addLayout(hlayout)
         self.setLayout(layout)
 
-    def newImages(self, images):
-        self.thumbnailView.model().newImages(images)
+        self.allBtn.clicked.connect(self.selectAll)
+        self.noneBtn.clicked.connect(self.deselectAll)
 
-    def addImages(self, images):
+        self.allBtn.setEnabled(False)
+        self.noneBtn.setEnabled(False)
+
+    @QtCore.pyqtSlot(Selection)
+    def onSourceSelected(self, _selection):
+        self.thumbnailView.model().clearImages()
+        self.allBtn.setEnabled(False)
+        self.noneBtn.setEnabled(False)
+        self.sourceManager.getImages()
+
+    @QtCore.pyqtSlot(list, str)
+    def addImages(self, images, msg):
+        self.logger.debug(f">>> Adding images to current set: {msg}")
         self.thumbnailView.model().addImages(images)
+        self.allBtn.setEnabled(True)
+        self.noneBtn.setEnabled(True)
 
-    def imagesLoaded(self, images):
-        self.thumbnailView.model().addImages(images, end=True)
+    @QtCore.pyqtSlot()
+    def selectAll(self):
+        model = self.thumbnailView.model()
+        for i in range(model.rowCount()):
+            index = model.index(i, 0, QtCore.QModelIndex())
+            model.setData(index, QtCore.Qt.Checked, QtCore.Qt.CheckStateRole)
 
-    # def updateImages(self):
-    #     images = self.sourceManager.getImages()
-    #     self.thumbnailView.model().setImages(images)
+    @QtCore.pyqtSlot()
+    def deselectAll(self):
+        model = self.thumbnailView.model()
+        for i in range(model.rowCount()):
+            index = model.index(i, 0, QtCore.QModelIndex())
+            model.setData(index, QtCore.Qt.Unchecked, QtCore.Qt.CheckStateRole)
 
-    def onSelectionChange(
+
+class ThumbnailView(QtWidgets.QListView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.possiblyPreserveSelectionPostClick = False
+
+    @QtCore.pyqtSlot(QtCore.QItemSelection, QtCore.QItemSelection)
+    def selectionChanged(
         self, selected: QtCore.QItemSelection, deselected: QtCore.QItemSelection
     ):
-        for index in selected.indexes():
-            model = index.model()
-            image = model.images[index.row()]
-            image.isSelected = True
-            model.dataChanged.emit(index, index, (QtCore.Qt.CheckStateRole,))
-            print(f"==> {image.name} is selected")
+        """
+        Reselect items if the user clicked a checkmark within an existing selection
+        :param selected: new selection
+        :param deselected: previous selection
+        """
 
-        for index in deselected.indexes():
-            model = index.model()
-            image = model.images[index.row()]
-            image.isSelected = False
-            model.dataChanged.emit(index, index, (QtCore.Qt.CheckStateRole,))
-            print(f"==> {image.name} is deselected")
+        super().selectionChanged(deselected, selected)
+
+        if self.possiblyPreserveSelectionPostClick:
+            # Must set this to False before adjusting the selection!
+            self.possiblyPreserveSelectionPostClick = False
+
+            print("Selection preserved")
+            current = self.currentIndex()
+            if not(len(selected.indexes()) == 1 and selected.indexes()[0] == current):
+                deselected.merge(self.selectionModel().selection(), QtCore.QItemSelectionModel.Select)
+                self.selectionModel().select(deselected, QtCore.QItemSelectionModel.Select)
+
+    @QtCore.pyqtSlot(QtGui.QMouseEvent)
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        """
+        Filter selection changes when click is on a thumbnail checkbox.
+
+        When the user has selected multiple items (thumbnails), and
+        then clicks one of the checkboxes, Qt's default behaviour is to
+        treat that click as selecting the single item, because it doesn't
+        know about our checkboxes. Therefore if the user is in fact
+        clicking on a checkbox, we need to filter that event.
+
+        On some versions of Qt 5 (to be determined), no matter what we do here,
+        the delegate's editorEvent will still be triggered.
+
+        :param event: the mouse click event
+        """
+        rightButtonPressed = event.button() == QtCore.Qt.RightButton
+        if rightButtonPressed:
+            super().mousePressEvent(event)
+
+        else:
+            clickedIndex = self.indexAt(event.pos())
+            clickedRow = clickedIndex.row()
+
+            if clickedRow >= 0:
+                rect = self.visualRect(clickedIndex)
+                delegate = self.itemDelegate(clickedIndex)
+                checkboxRect = delegate.getCheckboxRect(rect)
+                checkboxClicked = checkboxRect.contains(event.pos())
+
+                if checkboxClicked:
+                    print("Preserving selection")
+                    self.possiblyPreserveSelectionPostClick = True
+                    selected = self.selectionModel().selection()
+                    model = self.model()
+                    state = model.data(clickedIndex, QtCore.Qt.CheckStateRole)
+                    state = QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
+                    if len(selected.indexes()) > 1 and clickedIndex in selected.indexes():
+                        for index in selected.indexes():
+                            if not index == clickedIndex:
+                                model.setData(index, state, QtCore.Qt.CheckStateRole)
+
+            super().mousePressEvent(event)
+
+    @QtCore.pyqtSlot(QtGui.QKeyEvent)
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        """
+        Filter selection changes when click is on a thumbnail checkbox.
+
+        When the user has selected multiple items (thumbnails), and
+        then clicks one of the checkboxes, Qt's default behaviour is to
+        treat that click as selecting the single item, because it doesn't
+        know about our checkboxes. Therefore if the user is in fact
+        clicking on a checkbox, we need to filter that event.
+
+        On some versions of Qt 5 (to be determined), no matter what we do here,
+        the delegate's editorEvent will still be triggered.
+
+        :param event: the mouse click event
+        """
+        selectedIndexes = self.selectionModel().selection().indexes()
+        if len(selectedIndexes) < 1 or event.key() not in (QtCore.Qt.Key_Space, QtCore.Qt.Key_Select):
+            super().keyPressEvent(event)
+
+        else:
+            clickedIndex = self.currentIndex()
+            model = self.model()
+            state = model.data(clickedIndex, QtCore.Qt.CheckStateRole)
+            state = QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
+            for index in selectedIndexes:
+                if not index == clickedIndex:
+                    model.setData(index, state, QtCore.Qt.CheckStateRole)
+
+            super().keyPressEvent(event)

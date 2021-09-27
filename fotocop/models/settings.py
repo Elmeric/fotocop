@@ -7,7 +7,6 @@ As a model, it emit a 'modelChanged' signal when one of its attributes changes.
 """
 from fotocop.util import settings
 from fotocop.util import signal
-from fotocop.util import datatypes as dt
 
 __all__ = ['fotocopSettings']
 
@@ -40,11 +39,13 @@ class FotocopSettings(settings.Settings):
         settings (List[str]): the list of settings names.
     """
 
+    DEFAULT_LOGLEVEL = "INFO"
+
     modelChanged = signal.Signal(name='SettingsChanged')
 
     defaultDirectory = settings.Setting(defaultValue='F:/Users/Images/Mes Photos/Négatifs')
     lastProject = settings.Setting(defaultValue=None)
-    logLevel = settings.Setting(defaultValue=dt.DEFAULT_LOGLEVEL)
+    logLevel = settings.Setting(defaultValue=DEFAULT_LOGLEVEL)
     windowPosition = settings.Setting(defaultValue=(200, 250))
     windowSize = settings.Setting(defaultValue=(640, 480))
     qtScaleFactor = settings.Setting(defaultValue='1.1')

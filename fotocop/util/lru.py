@@ -31,7 +31,7 @@ class LRUCache(Cache):
         except StopIteration:
             raise KeyError("%s is empty" % type(self).__name__) from None
         else:
-            return (key, self.pop(key))
+            return key, self.pop(key)
 
     def __update(self, key):
         try:

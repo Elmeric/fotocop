@@ -2,19 +2,11 @@
 """
 import sys
 import os
-import time
 import logging
-import logging.handlers
-import threading
-from typing import Union
-from multiprocessing import Queue, Process
-from pathlib import Path
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
-
-import wmi
 
 import fotocop.__about__ as __about__
 from fotocop.util.logutil import LogConfig
@@ -25,20 +17,9 @@ from fotocop.util import qtutil as QtUtil
 from fotocop.models import settings as Config
 from fotocop.models.sources import SourceManager
 
-# from dcfs_builder.models.project import projectCreator
-# from dcfs_builder.models.history import MessageHistory, Message
 # Views
 from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
-
-# from .projectbrowser import ProjectBrowser, ProjectModel
-# from .adaptereditor import AdapterEditor
-# from .interfaceseditor import InterfacesEditor
-# from .projectdialogs import NewProjectDialog
-# from .consoleview import ConsoleView
-# from .settingsview import SettingsView
-# from .flowchainviewer.viewer import FlowChainViewer
-# from dcfs_builder.vcs.vcscontroller import VcsController
 
 
 __all__ = ["QtMain"]
@@ -97,7 +78,7 @@ class QtMainView(QtWidgets.QMainWindow):
         selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
         # Initialize the app's views. Init order to comply with the editors' dependencies.
-        self.sourceManager = SourceManager(logConfig)
+        self.sourceManager = SourceManager()
         self.sourceSelector = SourceSelector(self.sourceManager)
         self.destSelector = QtUtil.DirectorySelector(
             label="Destination folder:",
@@ -111,7 +92,7 @@ class QtMainView(QtWidgets.QMainWindow):
             parent=self,
         )
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
-        self.thumbnailViewer = ThumbnailViewer(self.sourceManager)
+        self.thumbnailViewer = ThumbnailViewer()
 
         self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
@@ -150,12 +131,21 @@ class QtMainView(QtWidgets.QMainWindow):
         #     shortcut=QtGui.QKeySequence.Save, icon=f'{resources}/filesave.png',
         #     tip="Save the DCFS project")
         helpAboutAction = QtUtil.createAction(
-            self, "&About", slot=self.helpAbout, tip="About the application",
-            shortcut="Ctrl+?", icon=f'{resources}/info.png')
+            self,
+            "&About",
+            slot=self.helpAbout,
+            tip="About the application",
+            shortcut="Ctrl+?",
+            icon=f"{resources}/info.png",
+        )
         settingsAction = QtUtil.createAction(
-            self, "Se&ttings", slot=self.adjustSettings,
-            shortcut="Ctrl+Alt+S", icon=f'{resources}/settings.png',
-            tip="Adjust application settings")
+            self,
+            "Se&ttings",
+            slot=self.adjustSettings,
+            shortcut="Ctrl+Alt+S",
+            icon=f"{resources}/settings.png",
+            tip="Adjust application settings",
+        )
         # showConsoleAction = QtUtil.createAction(
         #     self, "Show", slot=self.toggleConsole,
         #     shortcut="Alt+C", tip="Show last messages")
@@ -163,11 +153,7 @@ class QtMainView(QtWidgets.QMainWindow):
         #     self, "Start", slot=self.startBuilder,
         #     shortcut="CTRL+G", icon=QtGui.QIcon(f'{resources}/start.png'),
         #     tip="Generate DCFS XML file")
-        QtWidgets.QShortcut(
-            QtGui.QKeySequence('CTRL+Q'),
-            self,
-            self.close                                                  # noqa
-        )
+        QtWidgets.QShortcut(QtGui.QKeySequence("CTRL+Q"), self, self.close)  # noqa
 
         # The session toolbar content:
         iconSize = QtCore.QSize(40, 40)
@@ -350,14 +336,13 @@ class QtMainView(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def helpAbout(self):
-        """Show the DCFS 'About' dialog.
-        """
+        """Show the DCFS 'About' dialog."""
         pass
         resources = Config.fotocopSettings.resources
         appName = __about__.__title__
         QtWidgets.QMessageBox.about(
             self,  # noqa
-            f'{appName} - About',
+            f"{appName} - About",
             f"""
             <p><b>{appName}</b> {__about__.__version__}</p>
             <p>{__about__.__summary__}.</p>
@@ -382,7 +367,7 @@ class QtMainView(QtWidgets.QMainWindow):
             Icons selection from icons8.com <a href="https://icons8.com">
             <img style="vertical-align:middle" src="{resources}/icons8.png" alt="icons8.com" height="32"></a>
             </p>
-            """
+            """,
         )  # noqa
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
@@ -441,38 +426,6 @@ class QtMainView(QtWidgets.QMainWindow):
             event.ignore()
 
 
-class SplashScreen(QtWidgets.QSplashScreen):
-    def __init__(self, pixmap: QtGui.QPixmap, flags) -> None:
-        super().__init__(pixmap, flags)
-        self.progress = 0
-        try:
-            self.imageWidth = pixmap.width() / pixmap.devicePixelRatioF()
-        except AttributeError:
-            self.imageWidth = pixmap.width() / pixmap.devicePixelRatio()
-
-        self.progressBarPen = QtGui.QPen(QtGui.QBrush(QtGui.QColor(QtCore.Qt.green)), 5.0)
-
-    def drawContents(self, painter: QtGui.QPainter):
-        painter.save()
-        painter.setPen(QtGui.QColor(QtCore.Qt.black))
-        painter.drawText(12, 60, __about__.__version__)
-        if self.progress:
-            painter.setPen(self.progressBarPen)
-            x = int(self.progress / 100 * self.imageWidth)
-            painter.drawLine(0, 360, x, 360)
-        painter.restore()
-
-    def setProgress(self, value: int) -> None:
-        """Update the splash screen progress bar
-
-        Args:
-             value: percent done, between 0 and 100
-        """
-        self.progress = value
-        # time.sleep(0.2)
-        self.repaint()
-
-
 def QtMain():
     """Main Graphical Interface entry point.
 
@@ -517,9 +470,8 @@ def QtMain():
     # Use QIcon to render so we get the high DPI version automatically
     size = QtCore.QSize(600, 400)
     pixmap = QtUtil.scaledIcon(f"{resources}/splashscreen600.png", size).pixmap(size)
-    splash = SplashScreen(pixmap, QtCore.Qt.WindowStaysOnTopHint)
+    splash = QtUtil.SplashScreen(pixmap, __about__.__version__, QtCore.Qt.WindowStaysOnTopHint)
     splash.show()
-    # app.processEvents()
 
     # Build and show the main view after the splash screen delay.
     mainView = QtMainView(splash, logConfig)

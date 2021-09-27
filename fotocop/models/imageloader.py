@@ -1,9 +1,11 @@
 import logging
+import time
 from typing import Tuple, List
 from pathlib import Path
 from multiprocessing import Process, Event
+from enum import Enum, auto
 
-from fotocop.util.logutil import configureRootLogger
+from fotocop.util.logutil import LogConfig, configureRootLogger
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +14,11 @@ class ImageLoader(Process):
 
     BATCH_SIZE = 3
 
-    def __init__(self, conn, logConfig):
+    class Command(Enum):
+        STOP = auto()
+        SCAN = auto()
+
+    def __init__(self, conn):
         """
         Create a ImageLoader process instance and save the connection 'conn' to
         the main process.
@@ -21,6 +27,7 @@ class ImageLoader(Process):
 
         self.name = "ImageLoader"
 
+        logConfig = LogConfig()
         self.logQueue = logConfig.logQueue
         self.logLevel = logConfig.logLevel
 
@@ -58,19 +65,19 @@ class ImageLoader(Process):
         # Check for command on the process connection
         if self.conn.poll():
             action, arg = self.conn.recv()
-            if action == 'stop':
+            if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping image loader...")
                 self.exitProcess.set()
-            elif action == 'load':
-                # Load images
+            elif action == self.Command.SCAN:
+                # Scan images
                 path, subDirs = arg
                 logger.info(f"Scanning {path}{' and its subfolders' if subDirs else ''} for images...")
-                self.loadImages(Path(path), subDirs)
+                self.scanImages(Path(path), subDirs)
             else:
-                logger.warning(f"Unknown command {action} ignored")
+                logger.warning(f"Unknown command {action.name} ignored")
 
-    def loadImages(self, path: Path, subDirs: bool):
+    def scanImages(self, path: Path, subDirs: bool):
         walker = path.rglob("*") if subDirs else path.glob("*")
         imagesCount = 0
         batchesCount = 0
@@ -83,19 +90,19 @@ class ImageLoader(Process):
                 if imagesCount % ImageLoader.BATCH_SIZE == 0:
                     batchesCount += 1
                     logger.debug(f"Sending images: batch#{batchesCount}")
-                    self.publishData(batchesCount, imagesBatch)
+                    self.publishImagesBatch(batchesCount, imagesBatch)
                     imagesBatch = list()
         if imagesBatch:
             batchesCount += 1
             logger.debug(f"Sending remaining images: batch#{batchesCount}")
-            self.publishData(batchesCount, imagesBatch)
+            self.publishImagesBatch(batchesCount, imagesBatch)
         logger.info(f"{imagesCount} images found and sent in {batchesCount} batches")
 
     @staticmethod
     def _isImage(path: Path) -> bool:
         return path.suffix.lower() in (".jpg", ".raf", ".nef", ".dng")
 
-    def publishData(self, batch: int, images: List[Tuple[str, str]]):
+    def publishImagesBatch(self, batch: int, images: List[Tuple[str, str]]):
         data = (f"images#{batch}", images)
         try:
             self.conn.send(data)

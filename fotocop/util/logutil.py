@@ -1,9 +1,12 @@
 import logging
 import logging.handlers
 import multiprocessing as mp
+import time
 from queue import Empty
 from pathlib import Path
 from typing import Union
+
+from fotocop.util.basicpatterns import Singleton
 
 
 class _LogServer(mp.Process):
@@ -49,7 +52,7 @@ class _LogServer(mp.Process):
         while True:
             try:
                 try:
-                    record = self.logQueue.get(block=False)
+                    record = self.logQueue.get(block=True, timeout=0.01)
                 except Empty:
                     continue
                 if record is None:  # We send this as a sentinel to tell the listener to quit.
@@ -62,7 +65,7 @@ class _LogServer(mp.Process):
                 traceback.print_exc(file=sys.stderr)
 
 
-class LogConfig():
+class LogConfig(metaclass=Singleton):
     def __init__(
             self,
             logFile: Path = None,

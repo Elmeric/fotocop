@@ -1706,6 +1706,41 @@ class HistoryBrowser(QtWidgets.QWidget):
                 a.setIcon(self._activeIcon)
 
 
+class SplashScreen(QtWidgets.QSplashScreen):
+    def __init__(self, pixmap: QtGui.QPixmap, version: str, flags) -> None:
+        super().__init__(pixmap, flags)
+        self._version = version
+        self._progress = 0
+        try:
+            self._imageWidth = pixmap.width() / pixmap.devicePixelRatioF()
+        except AttributeError:
+            self._imageWidth = pixmap.width() / pixmap.devicePixelRatio()
+
+        self._progressBarPen = QtGui.QPen(
+            QtGui.QBrush(QtGui.QColor(QtCore.Qt.green)), 5.0
+        )
+
+    def drawContents(self, painter: QtGui.QPainter):
+        painter.save()
+        painter.setPen(QtGui.QColor(QtCore.Qt.black))
+        painter.drawText(12, 60, self._version)
+        if self._progress:
+            painter.setPen(self._progressBarPen)
+            x = int(self._progress / 100 * self._imageWidth)
+            painter.drawLine(0, 360, x, 360)
+        painter.restore()
+
+    def setProgress(self, value: int) -> None:
+        """Update the splash screen progress bar
+
+        Args:
+             value: percent done, between 0 and 100
+        """
+        self._progress = value
+        # time.sleep(0.2)
+        self.repaint()
+
+
 class QtSignalAdapter:
     def __init__(self, *argsType: Any, name: str = None):
         super().__init__()

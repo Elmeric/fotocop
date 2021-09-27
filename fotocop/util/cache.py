@@ -11,7 +11,8 @@ class _DefaultSize:
     def __setitem__(self, _, value):
         assert value == 1
 
-    def pop(self, _):
+    @staticmethod
+    def pop(_):
         return 1
 
 
@@ -112,6 +113,6 @@ class Cache(MutableMapping):
         return self.__currsize
 
     @staticmethod
-    def getsizeof(value):
+    def getsizeof(_value):
         """Return the size of a cache element's value."""
         return 1

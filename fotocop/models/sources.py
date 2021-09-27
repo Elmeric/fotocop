@@ -1,5 +1,6 @@
 import base64
 import logging
+import time
 
 from typing import Optional, Tuple, List, Union
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ import wmi
 from fotocop.util import exiftool
 from fotocop.util.lru import LRUCache
 from fotocop.util import qtutil as QtUtil
+from fotocop.util.basicpatterns import Singleton
 from fotocop.models.imageloader import ImageLoader
 
 logger = logging.getLogger(__name__)
@@ -41,16 +43,16 @@ class LogicalDisk:
 
     def __post_init__(self):
         if self.kind == DriveType.NETWORK:
-            self.name = self.providerName.split("\\")[-1]
-            self.path = Path("\\".join(self.providerName.split("\\")[:-1]))
-            self.caption = f"{self.name} ({self.path}) ({self.id})"
+            self.name: str = self.providerName.split("\\")[-1]
+            self.path: Path = Path("\\".join(self.providerName.split("\\")[:-1]))
+            self.caption: str = f"{self.name} ({self.path}) ({self.id})"
         else:
-            self.name = self.volumeName or self.description
-            self.path = Path(f"{self.id}\\")
-            self.caption = f"{self.name} ({self.id})"
+            self.name: str = self.volumeName or self.description
+            self.path: Path = Path(f"{self.id}\\")
+            self.caption: str = f"{self.name} ({self.id})"
 
-        self.selectedPath = None
-        self.subDirs = False
+        self.selectedPath: Optional[Path] = None
+        self.subDirs: bool = False
 
 
 @dataclass()
@@ -61,7 +63,7 @@ class Device:
     def __post_init__(self):
         self.caption = f"{self.name} ({self.logicalDisk.id})"
 
-        self.eject = False
+        self.eject: bool = False
 
 
 @dataclass()
@@ -69,12 +71,110 @@ class Selection:
     source: Optional[Union[Device, LogicalDisk]] = None
     kind: SourceType = SourceType.UNKNOWN
 
+    def getImages(self):
+        source = self.source
+        kind = self.kind
+        if source is None:
+            return
+
+        if kind == SourceType.DEVICE:
+            path = source.logicalDisk.path
+            subDirs = True
+        elif kind == SourceType.DRIVE:
+            path = source.selectedPath
+            subDirs = source.subDirs
+        else:
+            return
+
+        SourceManager().scanImages(path, subDirs)
+
 
 @dataclass()
 class Image:
     name: str
     path: str
-    isSelected: bool = True
+
+    def __post_init__(self):
+        self.isSelected: bool = True
+        self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
+
+    @property
+    def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:
+        if self._datetime is None:
+            dateTime = SourceManager().exifTool.get_tag("EXIF:DateTimeOriginal", self.path)
+            if dateTime:  # "YYYY:MM:DD HH:MM:SS"
+                date, time_ = dateTime.split(" ", 1)
+                year, month, day = date.split(":")
+                hour, minute, second = time_.split(":")
+                self._datetime = (year, month, day, hour, minute, second)    # noqa
+
+        return self._datetime
+
+    def getThumbnail(self) -> Tuple[Optional[bytes], float, int]:
+        path = self.path
+        sourceManager = SourceManager()
+        thumbnailCache = sourceManager.thumbnailCache
+        try:
+            imgdata, aspectRatio, orientation = thumbnailCache[path]
+            # print(f"Got image: {path} {aspectRatio} {orientation} from cache")
+        except KeyError:
+            pass
+        else:
+            return imgdata, aspectRatio, orientation
+
+        exif = sourceManager.exifTool.get_tags(
+            [
+                "EXIF:ThumbnailImage",
+                "EXIF:ThumbnailTIFF",
+                "EXIF:ImageWidth",
+                "EXIF:ImageHeight",
+                "EXIF:ExifImageWidth",
+                "EXIF:ExifImageHeight",
+                "EXIF:Orientation",
+            ],
+            path,
+        )
+        try:
+            imgstring = exif["EXIF:ThumbnailImage"]
+        except KeyError:
+            try:
+                imgstring = exif["EXIF:ThumbnailTIFF"]
+            except KeyError:
+                imgstring = None
+
+        try:
+            width = exif["EXIF:ExifImageWidth"]
+            height = exif["EXIF:ExifImageHeight"]
+            aspectRatio = (
+                round(width / height, 1) if width > height else round(height / width, 1)
+            )
+        except KeyError:
+            try:
+                width = exif["EXIF:ImageWidth"]
+                height = exif["EXIF:ImageHeight"]
+                aspectRatio = (
+                    round(width / height, 1)
+                    if width > height
+                    else round(height / width, 1)
+                )
+            except KeyError:
+                aspectRatio = 0
+
+        try:
+            rawOrient = exif["EXIF:Orientation"]
+            orientation = 90 if rawOrient == 6 else -90 if rawOrient == 8 else 0
+        except KeyError:
+            orientation = 0
+
+        if imgstring:
+            imgstring = imgstring[7:]
+            imgdata = base64.b64decode(imgstring)
+            thumbnailCache[path] = (imgdata, aspectRatio, orientation)
+            logger.debug(f"Loading image: {path} {aspectRatio} {orientation}")
+            return imgdata, aspectRatio, orientation
+
+        thumbnailCache[path] = (None, 0, 0)
+        return None, 0, 0
 
 
 class ImagesLoaderListener(Thread):
@@ -95,7 +195,10 @@ class ImagesLoaderListener(Thread):
                         continue
                     images = [Image(name, path) for name, path in v]
                     logger.debug(f"Received batch: {batch} containing {len(images)} images")
-                    self.imagesBatchLoaded.emit(images, "Loading in progress...")
+                    self.imagesBatchLoaded.emit(
+                        images,
+                        f"Loading images from batch {batch} containing {len(images)} images"
+                    )
             except (OSError, EOFError, BrokenPipeError):
                 self.alive.clear()
 
@@ -105,12 +208,12 @@ class ImagesLoaderListener(Thread):
         super().join(timeout)
 
 
-class SourceManager:
+class SourceManager(metaclass=Singleton):
 
     sourceSelected = QtUtil.QtSignalAdapter(Selection)
     imagesBatchLoaded = QtUtil.QtSignalAdapter(list, str)
 
-    def __init__(self, logConfig):
+    def __init__(self):
         self.devices = dict()
         self.logicalDisks = dict()
 
@@ -126,7 +229,7 @@ class SourceManager:
         logger.info("Starting image loader...")
         conn, child_conn = Pipe()
         self.imageLoaderConnection = conn
-        self.imageLoader = ImageLoader(child_conn, logConfig)
+        self.imageLoader = ImageLoader(child_conn)
         self.imageLoader.start()
         child_conn.close()
 
@@ -207,101 +310,13 @@ class SourceManager:
         if source and kind == SourceType.DEVICE:
             source.eject = state
 
-    def getImages(self):
-        source = self.selection.source
-        kind = self.selection.kind
-        if source is None:
-            return
-
-        if kind == SourceType.DEVICE:
-            path = source.logicalDisk.path
-            subDirs = True
-        elif kind == SourceType.DRIVE:
-            path = source.selectedPath
-            subDirs = source.subDirs
-        else:
-            return
-
-        self.imageLoaderConnection.send(('load', (path.as_posix(), subDirs)))
-
-    def getThumbnail(self, path: str) -> Tuple[Optional[bytes], float, int]:
-        try:
-            imgdata, aspectRatio, orientation = self.thumbnailCache[path]
-            # print(f"Got image: {path} {aspectRatio} {orientation} from cache")
-        except KeyError:
-            pass
-        else:
-            return imgdata, aspectRatio, orientation
-
-        exif = self.exifTool.get_tags(
-            [
-                "EXIF:ThumbnailImage",
-                "EXIF:ThumbnailTIFF",
-                "EXIF:ImageWidth",
-                "EXIF:ImageHeight",
-                "EXIF:ExifImageWidth",
-                "EXIF:ExifImageHeight",
-                "EXIF:Orientation",
-            ],
-            path,
+    def scanImages(self, path: Path, includeSubDirs: bool = False):
+        self.imageLoaderConnection.send(
+            (ImageLoader.Command.SCAN, (path.as_posix(), includeSubDirs))
         )
-        try:
-            imgstring = exif["EXIF:ThumbnailImage"]
-        except KeyError:
-            try:
-                imgstring = exif["EXIF:ThumbnailTIFF"]
-            except KeyError:
-                imgstring = None
-
-        try:
-            width = exif["EXIF:ExifImageWidth"]
-            height = exif["EXIF:ExifImageHeight"]
-            aspectRatio = (
-                round(width / height, 1) if width > height else round(height / width, 1)
-            )
-        except KeyError:
-            try:
-                width = exif["EXIF:ImageWidth"]
-                height = exif["EXIF:ImageHeight"]
-                aspectRatio = (
-                    round(width / height, 1)
-                    if width > height
-                    else round(height / width, 1)
-                )
-            except KeyError:
-                aspectRatio = 0
-
-        try:
-            rawOrient = exif["EXIF:Orientation"]
-            orientation = 90 if rawOrient == 6 else -90 if rawOrient == 8 else 0
-        except KeyError:
-            orientation = 0
-
-        if imgstring:
-            imgstring = imgstring[7:]
-            imgdata = base64.b64decode(imgstring)
-            self.thumbnailCache[path] = (imgdata, aspectRatio, orientation)
-            logger.debug(f"Loading image: {path} {aspectRatio} {orientation}")
-            return imgdata, aspectRatio, orientation
-
-        self.thumbnailCache[path] = (None, 0, 0)
-        return None, 0, 0
-
-    def getDateTime(self, path: str) -> Optional[Tuple[str, str, str, str, str, str]]:
-        dateTime = self.exifTool.get_tag("EXIF:DateTimeOriginal", path)
-        if dateTime:  # "YYYY:MM:DD HH:MM:SS"
-            date, time_ = dateTime.split(" ", 1)
-            year, month, day = date.split(":")
-            hour, minute, second = time_.split(":")
-            return year, month, day, hour, minute, second
-        return None
-
-    @staticmethod
-    def _isImage(path: Path) -> bool:
-        return path.suffix.lower() in (".jpg", ".raf", ".nef", ".dng")
 
     def close(self):
-        self.imageLoaderConnection.send(('stop', 0))
+        self.imageLoaderConnection.send((ImageLoader.Command.STOP, 0))
         self.imageLoaderConnection.close()
         self.imagesLoaderListener.join()
         logger.info("Stopping ExifTool...")

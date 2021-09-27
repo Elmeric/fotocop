@@ -28,13 +28,11 @@ THUMB_MARGIN = (CELL_IN_WIDTH - THUMB_HEIGHT) / 2
 class ImageModel(QtCore.QAbstractListModel):
     def __init__(
         self,
-        sourceManager: "SourceManager",
         images: List["Image"] = None,
         parent=None,
     ):
         super().__init__(parent)
 
-        self.sourceManager = sourceManager
         self.images = images or list()
 
     def rowCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
@@ -58,10 +56,10 @@ class ImageModel(QtCore.QAbstractListModel):
             return images[row].name
 
         if role == QtCore.Qt.UserRole:
-            return self.sourceManager.getThumbnail(images[row].path)
+            return images[row].getThumbnail()
 
         if role == QtCore.Qt.ToolTipRole:
-            dateTime = self.sourceManager.getDateTime(images[row].path)
+            dateTime = images[row].datetime
             if dateTime:
                 year, month, day, hour, minute, second = dateTime
                 return f"{year}{month}{day}-{hour}{minute}{second}"
@@ -264,10 +262,10 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class ThumbnailViewer(QtWidgets.QWidget):
-    def __init__(self, sourceManager: "SourceManager", parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.sourceManager = sourceManager
+        # self.selectedImagesSource = None
 
         self.logger = logging.getLogger(__name__)
 
@@ -278,8 +276,6 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.thumbnailView.setMovement(QtWidgets.QListView.Static)
         self.thumbnailView.setResizeMode(QtWidgets.QListView.Adjust)
         self.thumbnailView.setLayoutMode(QtWidgets.QListView.SinglePass)
-        # self.thumbnailView.setLayoutMode(QtWidgets.QListView.Batched)
-        # self.thumbnailView.setBatchSize(10)
         self.thumbnailView.setGridSize(QtCore.QSize(CELL_WIDTH, CELL_HEIGHT))
         self.thumbnailView.setUniformItemSizes(True)
         self.thumbnailView.setMinimumWidth(4 * CELL_WIDTH + 24)
@@ -287,7 +283,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
 
-        self.thumbnailView.setModel(ImageModel(sourceManager))
+        self.thumbnailView.setModel(ImageModel())
 
         self.thumbnailView.setItemDelegate(ThumbnailDelegate())
 
@@ -311,15 +307,16 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.noneBtn.setEnabled(False)
 
     @QtCore.pyqtSlot(Selection)
-    def onSourceSelected(self, _selection):
+    def onSourceSelected(self, selection):
         self.thumbnailView.model().clearImages()
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
-        self.sourceManager.getImages()
+        # self.selectedImagesSource = selection
+        selection.getImages()
 
     @QtCore.pyqtSlot(list, str)
     def addImages(self, images, msg):
-        self.logger.debug(f">>> Adding images to current set: {msg}")
+        self.logger.debug(f">>> Adding images to viewer: {msg}")
         self.thumbnailView.model().addImages(images)
         self.allBtn.setEnabled(True)
         self.noneBtn.setEnabled(True)

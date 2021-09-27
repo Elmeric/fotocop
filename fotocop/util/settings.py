@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, NamedTuple
 
-from fotocop.util import datatypes as dt
+from fotocop.util.basicpatterns import Singleton
 
 __all__ = ['Settings', 'SettingsError', 'Setting', 'getAppDirs']
 
@@ -50,7 +50,7 @@ class SettingsError(Exception):
     pass
 
 
-class Settings(object, metaclass=dt.Singleton):
+class Settings(object, metaclass=Singleton):
     """A base class to handle persistent application settings.
 
     Settings is a singleton: only one instance of settings may exists for an

@@ -1,15 +1,18 @@
 import logging
-from typing import TYPE_CHECKING, Any, List
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, List, Tuple
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
+from fotocop.models import settings as Config
 from fotocop.models.sources import Selection
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import SourceManager, Image
+    from fotocop.models.sources import Image
 
+logger = logging.getLogger(__name__)
 
 THUMB_WIDTH = 150
 THUMB_HEIGHT = 112
@@ -56,6 +59,7 @@ class ImageModel(QtCore.QAbstractListModel):
             return images[row].name
 
         if role == QtCore.Qt.UserRole:
+            logger.debug(f"Access to UserRole for {images[row].name}")
             return images[row].getThumbnail()
 
         if role == QtCore.Qt.ToolTipRole:
@@ -97,8 +101,21 @@ class ImageModel(QtCore.QAbstractListModel):
         self.endResetModel()
 
     def addImages(self, images: List["Image"]):
+        self.beginInsertRows(QtCore.QModelIndex(), self.rowCount(), self.rowCount() + len(images) - 1)
         self.images.extend(images)
-        self.layoutChanged.emit()
+        self.endInsertRows()
+
+    def updateImage(self, imageKey: str):
+        found = False
+        row = -1
+        for row, image in enumerate(self.images):
+            if image.path == imageKey:
+                found = True
+                break
+        if found:
+            index = self.index(row, 0)
+            self.dataChanged.emit(index, index, (QtCore.Qt.UserRole, QtCore.Qt.ToolTipRole))
+        # self.layoutChanged.emit()
 
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
@@ -107,11 +124,17 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         imageName = index.data(QtCore.Qt.DisplayRole)
         imageThumb, aspectRatio, orientation = index.data(QtCore.Qt.UserRole)
 
-        px = QtGui.QPixmap()
-        px.loadFromData(imageThumb)
-        px = px.scaledToWidth(THUMB_WIDTH)
-        rm = QtGui.QTransform().rotate(orientation)
-        px = px.transformed(rm)
+        resources = Config.fotocopSettings.resources
+
+        if imageThumb == "loading":
+            px = QtGui.QPixmap(f"{resources}/dummy-image.png")
+            px = px.scaledToWidth(THUMB_WIDTH)
+        else:
+            px = QtGui.QPixmap()
+            px.loadFromData(imageThumb)
+            px = px.scaledToWidth(THUMB_WIDTH)
+            rm = QtGui.QTransform().rotate(orientation)
+            px = px.transformed(rm)
 
         rect = option.rect
         cellLeft = rect.left() + CELL_MARGIN
@@ -267,6 +290,11 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         # self.selectedImagesSource = None
 
+        resources = Config.fotocopSettings.resources
+
+        iconSize = QtCore.QSize(24, 24)
+        filterIcon = QtGui.QIcon(f"{resources}/filter.png")
+
         self.logger = logging.getLogger(__name__)
 
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
@@ -283,16 +311,36 @@ class ThumbnailViewer(QtWidgets.QWidget):
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
 
-        self.thumbnailView.setModel(ImageModel())
+        # self.thumbnailView.setModel(ImageModel())
 
         self.thumbnailView.setItemDelegate(ThumbnailDelegate())
 
+        # self.setSortingEnabled(True)
+
+        proxyModel = ThumbnailFilterProxyModel()
+        self._imageModel = ImageModel()
+        proxyModel.setSourceModel(self._imageModel)
+        self.thumbnailView.setModel(proxyModel)
+
         self.allBtn = QtWidgets.QPushButton("All")
         self.noneBtn = QtWidgets.QPushButton("None")
+        self.filterBtn = QtWidgets.QToolButton()
+        self.filterBtn.setIconSize(iconSize)
+        self.filterBtn.setIcon(filterIcon)
+        self.filterBtn.setCheckable(True)
+        self.filterBtn.setToolTip('Filter images on date')
+        self.filterBtn.setStatusTip('Filter images on date')
+        self.fromDateSelector = QtWidgets.QDateEdit()
+        self.fromDateSelector.setCalendarPopup(True)
+        self.toDateSelector = QtWidgets.QDateEdit()
+        self.toDateSelector.setCalendarPopup(True)
 
         hlayout = QtWidgets.QHBoxLayout()
         hlayout.addWidget(self.allBtn)
         hlayout.addWidget(self.noneBtn)
+        hlayout.addWidget(self.filterBtn)
+        hlayout.addWidget(self.fromDateSelector)
+        hlayout.addWidget(self.toDateSelector)
         hlayout.addStretch()
 
         layout = QtWidgets.QVBoxLayout()
@@ -302,38 +350,67 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.allBtn.clicked.connect(self.selectAll)
         self.noneBtn.clicked.connect(self.deselectAll)
+        self.fromDateSelector.dateChanged.connect(self.setFromDate)
+        self.toDateSelector.dateChanged.connect(self.setToDate)
+        self.filterBtn.toggled.connect(self.toggleFilter)
 
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
+        self.fromDateSelector.setDate(QtCore.QDate.currentDate())
+        self.toDateSelector.setDate(QtCore.QDate.currentDate())
+        self.filterBtn.setChecked(False)
 
     @QtCore.pyqtSlot(Selection)
     def onSourceSelected(self, selection):
-        self.thumbnailView.model().clearImages()
+        self.thumbnailView.model().sourceModel().clearImages()
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
         # self.selectedImagesSource = selection
         selection.getImages()
 
-    @QtCore.pyqtSlot(list, str)
+    @QtCore.pyqtSlot(dict, str)
     def addImages(self, images, msg):
         self.logger.debug(f">>> Adding images to viewer: {msg}")
-        self.thumbnailView.model().addImages(images)
+        images = list(images.values())
+        self.thumbnailView.model().sourceModel().addImages(images)
         self.allBtn.setEnabled(True)
         self.noneBtn.setEnabled(True)
 
+    @QtCore.pyqtSlot(str)
+    def updateImage(self, imageKey: str):
+        self.logger.debug(f">>> Updating images: {imageKey}")
+        self.thumbnailView.model().sourceModel().updateImage(imageKey)
+
     @QtCore.pyqtSlot()
     def selectAll(self):
-        model = self.thumbnailView.model()
+        model = self.thumbnailView.model().sourceModel()
         for i in range(model.rowCount()):
             index = model.index(i, 0, QtCore.QModelIndex())
             model.setData(index, QtCore.Qt.Checked, QtCore.Qt.CheckStateRole)
 
     @QtCore.pyqtSlot()
     def deselectAll(self):
-        model = self.thumbnailView.model()
+        model = self.thumbnailView.model().sourceModel()
         for i in range(model.rowCount()):
             index = model.index(i, 0, QtCore.QModelIndex())
             model.setData(index, QtCore.Qt.Unchecked, QtCore.Qt.CheckStateRole)
+
+    @QtCore.pyqtSlot(QtCore.QDate)
+    def setFromDate(self, date: QtCore.QDate):
+        fromDate = date.toString("yyyyMMdd")
+        # fromDate = date.toPyDate()
+        toDate = self.toDateSelector.date().toString("yyyyMMdd")
+        self.thumbnailView.model().setDateFilter((fromDate, toDate))
+
+    @QtCore.pyqtSlot(QtCore.QDate)
+    def setToDate(self, date: QtCore.QDate):
+        toDate = date.toString("yyyyMMdd")
+        fromDate = self.fromDateSelector.date().toString("yyyyMMdd")
+        self.thumbnailView.model().setDateFilter((fromDate, toDate))
+
+    @QtCore.pyqtSlot(bool)
+    def toggleFilter(self, checked: bool):
+        self.thumbnailView.model().setIsDateFilterOn(checked)
 
 
 class ThumbnailView(QtWidgets.QListView):
@@ -438,3 +515,40 @@ class ThumbnailView(QtWidgets.QListView):
                     model.setData(index, state, QtCore.Qt.CheckStateRole)
 
             super().keyPressEvent(event)
+
+
+class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
+
+    _dateFilter = tuple()
+    _isDateFilterOn = False
+
+    @classmethod
+    def dateFilter(cls) -> Tuple[str, str]:
+        return cls._dateFilter
+
+    def setDateFilter(self, value: Tuple[str, str]):
+        ThumbnailFilterProxyModel._dateFilter = value
+        self.invalidateFilter()
+
+    @classmethod
+    def isDateFilterOn(cls) -> bool:
+        return cls._isDateFilterOn
+
+    def setIsDateFilterOn(self, value: bool):
+        ThumbnailFilterProxyModel._isDateFilterOn = value
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, sourceRow: int, sourceParent: QtCore.QModelIndex) -> bool:
+        OkDate = True
+
+        if self.isDateFilterOn():
+            index = self.sourceModel().index(sourceRow, 0, sourceParent)
+            dateTime = self.sourceModel().data(index, QtCore.Qt.ToolTipRole)
+            if dateTime:
+                dateTime = datetime.strptime(dateTime, "%Y%m%d-%H%M%S")
+                start, end = self.dateFilter()
+                start = datetime.strptime(start, "%Y%m%d")
+                end = datetime.strptime(end, "%Y%m%d")
+                OkDate = start <= dateTime <= end
+
+        return OkDate

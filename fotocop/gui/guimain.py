@@ -97,6 +97,8 @@ class QtMainView(QtWidgets.QMainWindow):
         self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
         self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
+        self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
+        # self.sourceManager.datetimeLoaded.connect(self.thumbnailViewer.updateImage)
 
         splash.setProgress(30)
 

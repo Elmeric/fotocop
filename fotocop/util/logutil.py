@@ -42,7 +42,7 @@ class _LogServer(mp.Process):
             consolehandler = logging.StreamHandler()
             consolehandler.set_name('console')
             consolehandler.setFormatter(logging.Formatter(logging_format))
-            consolehandler.setLevel(logging.INFO)
+            consolehandler.setLevel(logging.WARNING)
             root.addHandler(consolehandler)
 
         root.setLevel(logging.DEBUG)
@@ -56,6 +56,7 @@ class _LogServer(mp.Process):
                 except Empty:
                     continue
                 if record is None:  # We send this as a sentinel to tell the listener to quit.
+                    print("Stopping LogServer...")
                     break
                 logger = logging.getLogger(record.name)
                 logger.handle(record)
@@ -91,8 +92,10 @@ class LogConfig(metaclass=Singleton):
         configureRootLogger(self.logQueue, self.logLevel)
 
     def stopLogging(self):
+        time.sleep(1)
         self.logQueue.put_nowait(None)
         self.logServer.join()
+        print("LogServer stopped")
 
 
 def configureRootLogger(logQueue: mp.Queue, logLevel: Union[int, str]):

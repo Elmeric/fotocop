@@ -1,17 +1,14 @@
-import base64
 import logging
-import time
 
 from typing import Optional, Tuple, List, Union
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from pathlib import Path
 from multiprocessing import Pipe, Event
-from threading import Thread, enumerate
+from threading import Thread
 
 import wmi
 
-# from fotocop.util import exiftool
 from fotocop.util.lru import LRUCache
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton
@@ -170,9 +167,6 @@ class ImageScannerListener(Thread):
             newImages = dict()
             try:
                 if self.imageLoaderConnection.poll(timeout=0.01):
-                    # if SourceManager().abortScanning.is_set():
-                    #     # logger.info("ImageScannerListener: Image scanning aborted")
-                    #     continue
                     currentPath = SourceManager().selection.path
                     k, v = self.imageLoaderConnection.recv()
                     content, batch = k.split("#")
@@ -187,8 +181,6 @@ class ImageScannerListener(Thread):
                             f"images from batch {batch} containing {len(newImages)} images"
                         )
                         for image in newImages.values():
-                            # if SourceManager().abortScanning.is_set():
-                            #     break
                             image.getThumbnail()
             except (OSError, EOFError, BrokenPipeError):
                 self.alive.clear()
@@ -212,9 +204,6 @@ class ExifLoaderListener(Thread):
         while self.alive.is_set():
             try:
                 if self.exifLoaderConnection.poll(timeout=0.01):
-                    # if SourceManager().abortScanning.is_set():
-                    #     # logger.info("ExifLoaderListener: Exif loading aborted")
-                    #     continue
                     content, data, imageKey = self.exifLoaderConnection.recv()
                     sourceManager = SourceManager()
                     try:
@@ -261,9 +250,8 @@ class SourceManager(metaclass=Singleton):
         # Start the image scanner process and establish a Pipe connection with it
         logger.info("Starting image scanner...")
         imageScannerConnection, child_conn1 = Pipe()
-        self.scanInProgress = Event()
         self.imageScannerConnection = imageScannerConnection
-        self.imageScanner = ImageScanner(child_conn1, self.scanInProgress)
+        self.imageScanner = ImageScanner(child_conn1)
         self.imageScanner.start()
         child_conn1.close()
 
@@ -361,12 +349,6 @@ class SourceManager(metaclass=Singleton):
             source.eject = state
 
     def scanImages(self, path: Path, includeSubDirs: bool = False):
-        if self.scanInProgress.is_set():
-        #     logger.info("Abort scanning request")
-        #     self.abortScanning.set()
-            self.imageScannerConnection.send(
-                (ImageScanner.Command.ABORT, 0)
-            )
         self.imageScannerConnection.send(
             (ImageScanner.Command.SCAN, (path.as_posix(), includeSubDirs))
         )
@@ -378,7 +360,6 @@ class SourceManager(metaclass=Singleton):
         self.exifLoaderConnection.send((ExifLoader.Command.STOP, 0))
         self.exifLoaderConnection.close()
         self.exifLoaderListener.join()
-        print(enumerate())
 
     @staticmethod
     def eject():

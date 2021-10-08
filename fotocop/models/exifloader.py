@@ -1,17 +1,11 @@
 import logging
 import base64
-import time
-from typing import TYPE_CHECKING, Tuple
-from pathlib import Path
+from typing import Tuple
 from multiprocessing import Process, Event
-from threading import Thread
 from enum import Enum, auto
 
 from fotocop.util import exiftool
 from fotocop.util.logutil import LogConfig, configureRootLogger
-
-if TYPE_CHECKING:
-    from fotocop.models.sources import Image
 
 logger = logging.getLogger(__name__)
 

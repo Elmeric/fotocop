@@ -1,6 +1,8 @@
 import logging
 
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, Iterator
+from datetime import datetime
+from collections import Counter
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from pathlib import Path
@@ -12,6 +14,8 @@ import wmi
 from fotocop.util.lru import LRUCache
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton
+from fotocop.util.nodemixin import NodeMixin
+from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
 
@@ -64,6 +68,106 @@ class Device:
         self.eject: bool = False
 
 
+# class Timeline():
+#     def __init__(self):
+#         self._timeline = dict()
+#         # self._timeline = Counter()
+#         # # self._timeline = dict()
+#         self.start = None
+#         self.end = None
+#         self.minCount = 0
+#         self.maxCount = 0
+#
+#         years = {
+#             2021: [                         # 2021
+#                 100, {
+#                     1: [                    # january
+#                         10, {
+#                             11: [           # day 11
+#                                 5, {
+#                                     16: 2,  # hour 16
+#                                     17: 3   # hour 17
+#                                 }
+#                             ],
+#                             28: [           # day 28
+#                                 5, {
+#                                     15: 3,  # hour 15
+#                                     18: 2   # hour 18
+#                                 }
+#                             ]
+#                         }
+#                     ],
+#                     4: [                    # april
+#                         10, {
+#                             11: [           # day 11
+#                                 5, {
+#                                     16: 2,  # hour 16
+#                                     17: 3   # hour 17
+#                                 }
+#                             ],
+#                             28: [           # day 28
+#                                 5, {
+#                                     15: 3,  # hour 15
+#                                     18: 2   # hour 18
+#                                 }
+#                             ]
+#                         }
+#                     ]
+#                 }
+#             ]
+#         }
+#
+#     def __iter__(self) -> Iterator[Tuple[datetime, int]]:
+#         return iter(sorted(self._timeline.items()))
+#
+#     def add(self, dateTime: Tuple[str, str, str, str, str, str]):
+#         year, month, day, hour, *_useless = dateTime
+#         try:
+#             yCount, months = self._timeline[year]
+#         except KeyError:
+#             months = {month: [1, {day: [1, {hour: 1}]}]}
+#             self._timeline[year] = [1, months]
+#         else:
+#             self._timeline[year][0] = yCount + 1
+#             try:
+#                 mCount, days = months[month]
+#             except KeyError:
+#                 days = {day: [1, {hour: 1}]}
+#                 months[month] = [1, days]
+#             else:
+#                 months[month][0] = mCount + 1
+#                 try:
+#                     dCount, hours = days[day]
+#                 except KeyError:
+#                     hours = {hour: 1}
+#                     days[day] = [1, hours]
+#                 else:
+#                     days[day][0] = dCount + 1
+#                     try:
+#                         hCount = hours[hour]
+#                     except KeyError:
+#                         hours[hour] = 1
+#                     else:
+#                         hours[hour] = hCount + 1
+#
+#     def add1(self, dateTime: Tuple[str, str, str, str, str, str]):
+#         dateTime = tuple([int(s) for s in dateTime])
+#         dateTime = datetime(*dateTime)
+#         date = dateTime.date()
+#         start = self.start
+#         end = self.end
+#         if start is None or dateTime < start:
+#             self.start = dateTime
+#         if end is None or dateTime > end:
+#             self.end = dateTime
+#         self._timeline.update({date: 1})
+#         self.minCount = self._timeline.most_common()[-1][1]
+#         self.maxCount = self._timeline.most_common()[0][1]
+#         # self._timeline[date] = self._timeline.get(date, 0) + 1
+#         # if self._timeline[date] > self.maxCount:
+#         #     self.maxCount = self._timeline[date]
+
+
 @dataclass()
 class Selection:
     source: Optional[Union[Device, LogicalDisk]] = None
@@ -71,6 +175,7 @@ class Selection:
 
     def __post_init__(self):
         self.images = dict()
+        self.timeline = Timeline()
         self.thumbnailCache = LRUCache(500)
 
     @property
@@ -216,6 +321,7 @@ class ExifLoaderListener(Thread):
                         if content == "datetime":
                             logger.debug(f"Received datetime for image {imageKey}")
                             image.datetime = data
+                            sourceManager.selection.timeline.addDatetime(data)
                             self.datetimeLoaded.emit(imageKey)
                         elif content == "thumbnail":
                             logger.debug(f"Received thumbnail for image {imageKey}")
@@ -354,6 +460,16 @@ class SourceManager(metaclass=Singleton):
         )
 
     def close(self):
+        timeline = self.selection.timeline
+        print(timeline, len(timeline))
+        for year in self.selection.timeline:
+            print("Year ", year)
+            for month in year:
+                print("  Month ", month)
+                for day in month:
+                    print("    Day ", day)
+                    for hour in day:
+                        print("      Hour ", hour)
         self.imageScannerConnection.send((ImageScanner.Command.STOP, 0))
         self.imageScannerConnection.close()
         self.imagesScannerListener.join()

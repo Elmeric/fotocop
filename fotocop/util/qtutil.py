@@ -19,9 +19,12 @@ It provides:
     - A stack of toolbars where only one toolbar is visible at a time.
     - A basic textual filter input widget.
 """
-from typing import Dict, Callable, Optional, Union, List, Any
+from typing import Dict, Callable, Optional, Union, List, Any, Tuple
 from enum import Enum, auto
 from pathlib import Path
+from datetime import datetime, date, timedelta
+from collections import Counter
+
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -1768,3 +1771,101 @@ class QtSignalAdapter:
         if instance is None:
             return self
         return getattr(self.qtSignal, self.name)
+
+
+class TimelineView(QtWidgets.QWidget):
+
+    barColor = QtGui.QColor(127, 0, 127)
+
+    def __init__(self, timeline: Optional[Counter] = None, parent = None):
+        super().__init__(parent)
+
+        self._timeline = timeline
+        if timeline is None:
+            self._start = date.today() - timedelta(days=30)
+            self._end = date.today()
+            self._minY = self._maxY = 0
+        else:
+            self.setTimeline(timeline)
+        self._margin = 8
+
+        self.setWindowTitle("Timeline")
+        self.resize(600, 200)
+
+    def setTimeline(self, timeline: Counter):
+        self._timeline = timeline
+        self._start = list(timeline.keys())[0]
+        self._end = list(timeline.keys())[-1]
+        self._x, self._y = zip(*timeline.most_common())
+        self._minY = min(*self._y)
+        self._maxY = max(*self._y)
+        self.update()
+
+    def getStart(self) -> date:
+        return self._start
+
+    def getEnd(self) -> date:
+        return self._end
+
+    def paintEvent(self, event):
+        width = self.width()
+        height = self.height()
+        margin = self._margin
+        barWidth = 20
+        start = self._start
+        end = self._end
+        points = zip(self._x, self._y)
+        scaleX = width / ((end - start) / timedelta(days=1))
+        scaleY = (height - 2*margin) / self._maxY
+
+        background = QtGui.QBrush(QtGui.QColor(127, 127, 127))
+        foreground = QtGui.QBrush(self.barColor)
+        # foreground = QtGui.QPen(self.barColor)
+        # textPen = QtGui.QPen(option.palette.color(QtGui.QPalette.Text))
+        # highlightedPen = QtGui.QPen(option.palette.color(QtGui.QPalette.HighlightedText))
+
+        # https://stackoverflow.com/questions/4413570/use-window-viewport-to-flip-qpainter-y-axis
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.translate(0, height)
+        painter.scale(1, -1)
+
+        bgRect = QtCore.QRect(0, 0, width, height)
+        painter.fillRect(bgRect, background)
+        painter.setPen(self.barColor)
+        timelineRect = QtCore.QRectF(
+            margin, margin,
+            width - 2*margin, height - 2*margin
+        )
+        painter.drawRect(timelineRect)
+        painter.setBrush(foreground)
+        painter.setPen(QtCore.Qt.NoPen)
+
+        i = 0
+        for x, y in points:
+            pointRect = QtCore.QRect(
+                margin + i*(margin + barWidth),
+                # ((x - start) / timedelta(days=1)) * scaleX,
+                margin,
+                20,
+                y * scaleY,
+            )
+            i += 1
+            painter.fillRect(pointRect, self.barColor)
+
+
+if __name__ == '__main__':
+
+    import sys
+
+    app = QtWidgets.QApplication(sys.argv)
+    tl = Counter(
+        {
+            date(2021, 2, 14): 5,
+            date(2021, 3, 20): 90,
+            date(2021, 4, 16): 16,
+        }
+    )
+    timeline = TimelineView(tl)
+    timeline.show()
+    sys.exit(app.exec_())

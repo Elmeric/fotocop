@@ -14,7 +14,6 @@ import wmi
 from fotocop.util.lru import LRUCache
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton
-from fotocop.util.nodemixin import NodeMixin
 from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
@@ -461,7 +460,7 @@ class SourceManager(metaclass=Singleton):
 
     def close(self):
         timeline = self.selection.timeline
-        print(timeline, len(timeline))
+        print(timeline, timeline.childCount())
         for year in self.selection.timeline:
             print("Year ", year)
             for month in year:

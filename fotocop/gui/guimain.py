@@ -20,6 +20,7 @@ from fotocop.models.sources import SourceManager
 # Views
 from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
+from .timelineviewer import TimelineView
 
 
 __all__ = ["QtMain"]
@@ -94,11 +95,14 @@ class QtMainView(QtWidgets.QMainWindow):
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         self.thumbnailViewer = ThumbnailViewer()
 
+        self.timelineViewer = TimelineView()
+
         self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
+        self.sourceManager.sourceSelected.connect(self.timelineViewer.onSourceSelected)
         self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
         self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
-        # self.sourceManager.datetimeLoaded.connect(self.thumbnailViewer.updateImage)
+        self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
 
         splash.setProgress(30)
 
@@ -109,10 +113,12 @@ class QtMainView(QtWidgets.QMainWindow):
 
         horzSplitter.addWidget(self.sourceSelector)
         horzSplitter.addWidget(self.thumbnailViewer)
+        horzSplitter.addWidget(self.timelineViewer)
         horzSplitter.addWidget(self.destSelector)
         horzSplitter.setStretchFactor(0, 1)
-        horzSplitter.setStretchFactor(1, 2)
+        horzSplitter.setStretchFactor(1, 3)
         horzSplitter.setStretchFactor(2, 1)
+        horzSplitter.setStretchFactor(3, 1)
         horzSplitter.setOpaqueResize(False)
 
         self.setCentralWidget(horzSplitter)

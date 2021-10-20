@@ -31,8 +31,8 @@ class TimelineNode(nd.NodeMixin):
         return self._id
 
     @property
-    def record(self) -> Tuple[NodeKind, str, int]:
-        return self.kind, self._id, self.weight
+    def record(self) -> Tuple[str, int]:
+        return self._id, self.weight
 
     @property
     def childrenDict(self) -> Dict[str, "TimelineNode"]:
@@ -58,16 +58,13 @@ class TimelineNode(nd.NodeMixin):
         assert self.kind == NodeKind.DAY
         return self.childrenDict
 
-    def __len__(self) -> int:
-        return len(self.children)
-
     def __eq__(self, other: "TimelineNode") -> bool:
         if not isinstance(other, TimelineNode):
             return NotImplemented
         if other.kind != self.kind:
             return NotImplemented
         if other.parent != self.parent:
-            return NotImplemented
+            return False
         return self.key == other.key
 
     def __lt__(self, other: "TimelineNode") -> bool:
@@ -92,6 +89,10 @@ class TimelineNode(nd.NodeMixin):
     def __str__(self) -> str:
         return f"{self._id}: {self.weight}"
 
+    def _post_attach(self, parent):
+        """Method call after attaching to `parent` to sort children."""
+        parent._NodeMixin__children = sorted(parent.children)
+
     def childByKey(self, key: str) -> Optional["TimelineNode"]:
         for child in self.children:
             if child.key == key:
@@ -115,6 +116,20 @@ class TimelineNode(nd.NodeMixin):
             logger.debug(
                 f"New {key[1].name} {key[0]} added to {self.kind.name} {self.key}"
             )
+
+    def childCount(self):
+        return len(self.children)
+
+    def childRow(self):
+        if self.parent is not None:
+            return self.parent.children.index(self, )
+        return 0
+
+    def childAtRow(self, row: int):
+        try:
+            return self.children[row]
+        except IndexError:
+            return None
 
 
 class Timeline(TimelineNode):

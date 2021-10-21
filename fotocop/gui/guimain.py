@@ -20,7 +20,7 @@ from fotocop.models.sources import SourceManager
 # Views
 from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
-from .timelineviewer import TimelineView
+from .timelineviewer import TimelineViewer
 
 
 __all__ = ["QtMain"]
@@ -95,7 +95,7 @@ class QtMainView(QtWidgets.QMainWindow):
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         self.thumbnailViewer = ThumbnailViewer()
 
-        self.timelineViewer = TimelineView()
+        self.timelineViewer = TimelineViewer()
 
         self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)

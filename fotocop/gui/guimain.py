@@ -102,23 +102,31 @@ class QtMainView(QtWidgets.QMainWindow):
         self.sourceManager.sourceSelected.connect(self.timelineViewer.onSourceSelected)
         self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
         self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
-        self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
+        self.sourceManager.timelineChanged.connect(self.timelineViewer.updateTimeline)
+        self.thumbnailViewer.zoomed.connect(self.timelineViewer.zoom)
+        self.timelineViewer.zoomed.connect(self.thumbnailViewer.onZoomLevelChanged)
 
         splash.setProgress(30)
 
         # Build the main view layout.
+        vertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        vertSplitter.setChildrenCollapsible(False)
+        vertSplitter.setHandleWidth(2)
+        vertSplitter.addWidget(self.thumbnailViewer)
+        vertSplitter.addWidget(self.timelineViewer)
+        vertSplitter.setStretchFactor(0, 5)
+        vertSplitter.setStretchFactor(1, 1)
+        vertSplitter.setOpaqueResize(False)
+
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         horzSplitter.setChildrenCollapsible(False)
         horzSplitter.setHandleWidth(2)
-
         horzSplitter.addWidget(self.sourceSelector)
-        horzSplitter.addWidget(self.thumbnailViewer)
-        horzSplitter.addWidget(self.timelineViewer)
+        horzSplitter.addWidget(vertSplitter)
         horzSplitter.addWidget(self.destSelector)
         horzSplitter.setStretchFactor(0, 1)
         horzSplitter.setStretchFactor(1, 3)
         horzSplitter.setStretchFactor(2, 1)
-        horzSplitter.setStretchFactor(3, 1)
         horzSplitter.setOpaqueResize(False)
 
         self.setCentralWidget(horzSplitter)

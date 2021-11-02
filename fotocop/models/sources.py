@@ -14,7 +14,7 @@ import wmi
 from fotocop.util.lru import LRUCache
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton
-from fotocop.models.timeline import Timeline
+from fotocop.models.timeline import Timeline, TimelineNode
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
 
@@ -321,7 +321,7 @@ class ExifLoaderListener(Thread):
                             logger.debug(f"Received datetime for image {imageKey}")
                             image.datetime = data
                             sourceManager.selection.timeline.addDatetime(data)
-                            self.datetimeLoaded.emit(imageKey)
+                            self.datetimeLoaded.emit(data)
                         elif content == "thumbnail":
                             logger.debug(f"Received thumbnail for image {imageKey}")
                             sourceManager.selection.thumbnailCache[image.path] = data
@@ -344,13 +344,15 @@ class SourceManager(metaclass=Singleton):
     sourceSelected = QtUtil.QtSignalAdapter(Selection)
     imagesBatchLoaded = QtUtil.QtSignalAdapter(dict, str)   # images, msg
     thumbnailLoaded = QtUtil.QtSignalAdapter(str)           # name
-    datetimeLoaded = QtUtil.QtSignalAdapter(str)            # name
+    datetimeLoaded = QtUtil.QtSignalAdapter(tuple)          # name
+    timelineChanged = QtUtil.QtSignalAdapter(TimelineNode)         # name
 
     def __init__(self):
         self.devices = dict()
         self.logicalDisks = dict()
 
         self.selection = Selection()
+        self.selection.timeline.childrenChanged.connect(self.timelineChanged)
 
         # Start the image scanner process and establish a Pipe connection with it
         logger.info("Starting image scanner...")
@@ -426,6 +428,7 @@ class SourceManager(metaclass=Singleton):
             self.selection = Selection(device, SourceType.DEVICE)
             self.selection.source.eject = eject
 
+        self.selection.timeline.childrenChanged.connect(SourceManager().timelineChanged)
         self.sourceSelected.emit(self.selection)
 
     def selectDrive(self, driveId: str, path: Path, subDirs: bool = False):
@@ -438,6 +441,7 @@ class SourceManager(metaclass=Singleton):
             self.selection.source.selectedPath = path
             self.selection.source.subDirs = subDirs
 
+        self.selection.timeline.childrenChanged.connect(SourceManager().timelineChanged)
         self.sourceSelected.emit(self.selection)
 
     def setDriveSubDirsState(self, state: bool):

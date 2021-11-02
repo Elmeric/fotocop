@@ -5,6 +5,7 @@ from enum import Enum, auto
 from functools import total_ordering
 
 from fotocop.util import nodemixin as nd
+from fotocop.util import qtutil as QtUtil
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ class TimelineNode(nd.NodeMixin):
         self._id = id_
         self.kind = kind
         self.weight = 1
+        self._maxChildrenWeight = 1
+        self._maxGrandChildrenWeight = 1
 
     @property
     def key(self) -> str:
@@ -33,6 +36,24 @@ class TimelineNode(nd.NodeMixin):
     @property
     def record(self) -> Tuple[str, int]:
         return self._id, self.weight
+
+    @property
+    def maxChildrenWeight(self):
+        return self._maxChildrenWeight
+
+    @maxChildrenWeight.setter
+    def maxChildrenWeight(self, value: int):
+        if value > self._maxChildrenWeight:
+            self._maxChildrenWeight = value
+
+    @property
+    def maxGrandChildrenWeight(self):
+        return self._maxGrandChildrenWeight
+
+    @maxGrandChildrenWeight.setter
+    def maxGrandChildrenWeight(self, value: int):
+        if value > self._maxGrandChildrenWeight:
+            self._maxGrandChildrenWeight = value
 
     @property
     def childrenDict(self) -> Dict[str, "TimelineNode"]:
@@ -105,6 +126,9 @@ class TimelineNode(nd.NodeMixin):
             if args:
                 child.addChild(*args)
             child.weight += 1
+            self.maxChildrenWeight = child.weight
+            if not self.is_root:
+                self.parent.maxGrandChildrenWeight = child.weight
             logger.debug(
                 f"{key[1].name} {key[0]} added to {self.kind.name} {self.key}, weight is now: {child.weight}"
             )
@@ -119,6 +143,9 @@ class TimelineNode(nd.NodeMixin):
 
     def childCount(self):
         return len(self.children)
+
+    def grandChildCount(self):
+        return sum((child.childCount() for child in self.children))
 
     def childRow(self):
         if self.parent is not None:
@@ -140,6 +167,8 @@ class Timeline(TimelineNode):
     are Hour elements.
     """
 
+    childrenChanged = QtUtil.QtSignalAdapter(TimelineNode)            # name
+
     def __init__(self):
         super().__init__("Timeline", NodeKind.ROOT)
         self.weight = 0
@@ -149,6 +178,7 @@ class Timeline(TimelineNode):
         nodes = [(key, kind[i]) for i, key in enumerate(dateTime[:4])]
         self.addChild(*nodes)
         self.weight += 1
+        self.childrenChanged.emit(self)
 
     def addYear(self, year: TimelineNode):
         """Adds the given year to the year's container."""

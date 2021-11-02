@@ -8,6 +8,7 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.models import settings as Config
 from fotocop.models.sources import Selection
+from .timelineviewer import ZoomLevel
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Image
@@ -202,7 +203,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         painter.drawRect(cellRect)
 
         if option.state & QtWidgets.QStyle.State_Selected:
-            pen = QtGui.QPen(QtGui.QColor("yellow"), 3)
+            pen = QtGui.QPen(QtGui.QColor("deepskyblue"), 3)
             painter.setPen(pen)
             painter.drawRect(target)
 
@@ -285,6 +286,9 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class ThumbnailViewer(QtWidgets.QWidget):
+
+    zoomed = QtCore.pyqtSignal(ZoomLevel)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -335,12 +339,18 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.toDateSelector = QtWidgets.QDateEdit()
         self.toDateSelector.setCalendarPopup(True)
 
+        self.zoomLevelSelector = QtWidgets.QComboBox()
+        for z in ZoomLevel:
+            self.zoomLevelSelector.addItem(z.name,z)
+        # self.zoomLevelSelector.addItems([z.name for z in ZoomLevel])
+
         hlayout = QtWidgets.QHBoxLayout()
         hlayout.addWidget(self.allBtn)
         hlayout.addWidget(self.noneBtn)
         hlayout.addWidget(self.filterBtn)
         hlayout.addWidget(self.fromDateSelector)
         hlayout.addWidget(self.toDateSelector)
+        hlayout.addWidget(self.zoomLevelSelector)
         hlayout.addStretch()
 
         layout = QtWidgets.QVBoxLayout()
@@ -353,6 +363,9 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.fromDateSelector.dateChanged.connect(self.setFromDate)
         self.toDateSelector.dateChanged.connect(self.setToDate)
         self.filterBtn.toggled.connect(self.toggleFilter)
+        self.zoomLevelSelector.activated.connect(
+            lambda: self.zoomed.emit(self.zoomLevelSelector.currentData())
+        )
 
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
@@ -411,6 +424,11 @@ class ThumbnailViewer(QtWidgets.QWidget):
     @QtCore.pyqtSlot(bool)
     def toggleFilter(self, checked: bool):
         self.thumbnailView.model().setIsDateFilterOn(checked)
+
+    @QtCore.pyqtSlot(ZoomLevel)
+    def onZoomLevelChanged(self, zoomLevel: ZoomLevel):
+        print(f"In Thumbnail viewer, zoom level is now: {zoomLevel.name}")
+        self.zoomLevelSelector.setCurrentText(zoomLevel.name)
 
 
 class ThumbnailView(QtWidgets.QListView):

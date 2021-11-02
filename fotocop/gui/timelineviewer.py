@@ -27,6 +27,8 @@ class TimelineViewer(QtWidgets.QWidget):
         scene = FlowChainScene(parent=self)
         self._emptyScene = scene
 
+        self._zoomLevel = ZoomLevel.YEAR
+
         resources = Config.fotocopSettings.resources
         # jsonStyle = Config.fotocopSettings.appDirs.user_config_dir / 'flow_chain_style.json'
 
@@ -46,7 +48,7 @@ class TimelineViewer(QtWidgets.QWidget):
         layout.invalidate()
         layout.activate()
 
-        self._view.zoomed.connect(self.zoomed)
+        self._view.zoomed.connect(self.onZoomLevelChanged)
 
     @QtCore.pyqtSlot(Selection)
     def onSourceSelected(self, selection):
@@ -61,7 +63,15 @@ class TimelineViewer(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(ZoomLevel)
     def zoom(self, zoomLevel: ZoomLevel):
-        self._view.zoom(zoomLevel)
+        if zoomLevel != self._zoomLevel:
+            self._zoomLevel = zoomLevel
+            self._view.zoom(zoomLevel)
+
+    @QtCore.pyqtSlot(ZoomLevel)
+    def onZoomLevelChanged(self, zoomLevel: ZoomLevel):
+        if zoomLevel != self._zoomLevel:
+            self._zoomLevel = zoomLevel
+            self.zoomed.emit(zoomLevel)
 
     def setTimeline(self, timeline: Timeline):
         if timeline.childCount() > 0:
@@ -150,8 +160,9 @@ class FlowChainView(QtWidgets.QGraphicsView):
         else:
             # Scale down
             zoom = ZoomLevel(max(ZoomLevel.YEAR, self._zoom - 1))
-        self._zoom = zoom
-        self.zoom(zoom)
+        if zoom != self._zoom:
+            self._zoom = zoom
+            self.zoom(zoom)
 
     def keyPressEvent(self, event: QtGui.QKeyEvent):
         """Change the drag mode to a rubber band when Shift key is pressed.

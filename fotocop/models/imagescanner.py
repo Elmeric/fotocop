@@ -54,6 +54,7 @@ class ScanHandler(StoppableThread):
             self._publishImagesBatch(batchesCount, imagesBatch)
         if not stopped:
             logger.info(f"{imagesCount} images found and sent in {batchesCount} batches")
+        self._publishScanComplete(imagesCount, stopped)
 
     @staticmethod
     def _isImage(path: Path) -> bool:
@@ -64,6 +65,14 @@ class ScanHandler(StoppableThread):
         try:
             self._conn.send(data)
             logger.debug(f"Images sent: batch#{batch}")
+        except (OSError, EOFError, BrokenPipeError):
+            pass
+
+    def _publishScanComplete(self, imagesCount: int, stopped: bool):
+        data = (f"images#ScanComplete", (imagesCount, stopped))
+        try:
+            self._conn.send(data)
+            logger.info(f"{imagesCount} images found ({'stopped' if stopped else ''})")
         except (OSError, EOFError, BrokenPipeError):
             pass
 
@@ -125,9 +134,11 @@ class ImageScanner(Process):
                 # Stop the 'main' loop
                 logger.info("Stopping image scanner...")
                 self._exitProcess.set()
+            elif action == self.Command.ABORT:
+                # Stop scanning images
+                self._stopScanning()
             elif action == self.Command.SCAN:
                 # Scan images
-                self._stopScanning()
                 path, subDirs = arg
                 logger.debug(f"Start a new scan handler")
                 self._scanHandler = ScanHandler(path, subDirs, conn)

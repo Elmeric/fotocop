@@ -1,4 +1,5 @@
 import logging
+import time
 
 from typing import Optional, Tuple, List, Union, Iterator
 from datetime import datetime
@@ -14,7 +15,7 @@ import wmi
 from fotocop.util.lru import LRUCache
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton
-from fotocop.models.timeline import Timeline, TimelineNode
+from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
 
@@ -67,106 +68,6 @@ class Device:
         self.eject: bool = False
 
 
-# class Timeline():
-#     def __init__(self):
-#         self._timeline = dict()
-#         # self._timeline = Counter()
-#         # # self._timeline = dict()
-#         self.start = None
-#         self.end = None
-#         self.minCount = 0
-#         self.maxCount = 0
-#
-#         years = {
-#             2021: [                         # 2021
-#                 100, {
-#                     1: [                    # january
-#                         10, {
-#                             11: [           # day 11
-#                                 5, {
-#                                     16: 2,  # hour 16
-#                                     17: 3   # hour 17
-#                                 }
-#                             ],
-#                             28: [           # day 28
-#                                 5, {
-#                                     15: 3,  # hour 15
-#                                     18: 2   # hour 18
-#                                 }
-#                             ]
-#                         }
-#                     ],
-#                     4: [                    # april
-#                         10, {
-#                             11: [           # day 11
-#                                 5, {
-#                                     16: 2,  # hour 16
-#                                     17: 3   # hour 17
-#                                 }
-#                             ],
-#                             28: [           # day 28
-#                                 5, {
-#                                     15: 3,  # hour 15
-#                                     18: 2   # hour 18
-#                                 }
-#                             ]
-#                         }
-#                     ]
-#                 }
-#             ]
-#         }
-#
-#     def __iter__(self) -> Iterator[Tuple[datetime, int]]:
-#         return iter(sorted(self._timeline.items()))
-#
-#     def add(self, dateTime: Tuple[str, str, str, str, str, str]):
-#         year, month, day, hour, *_useless = dateTime
-#         try:
-#             yCount, months = self._timeline[year]
-#         except KeyError:
-#             months = {month: [1, {day: [1, {hour: 1}]}]}
-#             self._timeline[year] = [1, months]
-#         else:
-#             self._timeline[year][0] = yCount + 1
-#             try:
-#                 mCount, days = months[month]
-#             except KeyError:
-#                 days = {day: [1, {hour: 1}]}
-#                 months[month] = [1, days]
-#             else:
-#                 months[month][0] = mCount + 1
-#                 try:
-#                     dCount, hours = days[day]
-#                 except KeyError:
-#                     hours = {hour: 1}
-#                     days[day] = [1, hours]
-#                 else:
-#                     days[day][0] = dCount + 1
-#                     try:
-#                         hCount = hours[hour]
-#                     except KeyError:
-#                         hours[hour] = 1
-#                     else:
-#                         hours[hour] = hCount + 1
-#
-#     def add1(self, dateTime: Tuple[str, str, str, str, str, str]):
-#         dateTime = tuple([int(s) for s in dateTime])
-#         dateTime = datetime(*dateTime)
-#         date = dateTime.date()
-#         start = self.start
-#         end = self.end
-#         if start is None or dateTime < start:
-#             self.start = dateTime
-#         if end is None or dateTime > end:
-#             self.end = dateTime
-#         self._timeline.update({date: 1})
-#         self.minCount = self._timeline.most_common()[-1][1]
-#         self.maxCount = self._timeline.most_common()[0][1]
-#         # self._timeline[date] = self._timeline.get(date, 0) + 1
-#         # if self._timeline[date] > self.maxCount:
-#         #     self.maxCount = self._timeline[date]
-
-
 @dataclass()
 class Selection:
     source: Optional[Union[Device, LogicalDisk]] = None
@@ -174,8 +75,10 @@ class Selection:
 
     def __post_init__(self):
         self.images = dict()
+        self.expectedImagesCount = 0
+        self.imageScanStopped = False
         self.timeline = Timeline()
-        self.thumbnailCache = LRUCache(500)
+        self.thumbnailCache = LRUCache(50)
 
     @property
     def path(self) -> str:
@@ -226,7 +129,7 @@ class Image:
                 logger.debug(f"Thumbnail cache missed for image: {self.name}")
                 self.loadingInProgress = True   # noqa
                 SourceManager().exifLoaderConnection.send(
-                    (ExifLoader.Command.LOAD_ALL, (self.name, self.path))
+                    (ExifLoader.Command.LOAD_DATE, (self.name, self.path))
                 )
             else:
                 logger.debug(f"Loading in progress: {self.name}")
@@ -247,8 +150,13 @@ class Image:
             if not self.loadingInProgress:
                 logger.debug(f"Thumbnail cache missed for image: {name}")
                 self.loadingInProgress = True   # noqa
+                # Load date/time only if not yet loaded to avoid double count in the timeline
+                if self._datetime is None:
+                    command = ExifLoader.Command.LOAD_ALL
+                else:
+                    command = ExifLoader.Command.LOAD_THUMB
                 sourceManager.exifLoaderConnection.send(
-                    (ExifLoader.Command.LOAD_ALL, (name, path))
+                    (command, (name, path))
                 )
             else:
                 logger.debug(f"Loading in progress: {name}")
@@ -268,17 +176,28 @@ class ImageScannerListener(Thread):
     def run(self):
         self.alive.set()
         while self.alive.is_set():
-            newImages = dict()
             try:
                 if self.imageLoaderConnection.poll(timeout=0.01):
-                    currentPath = SourceManager().selection.path
+                    sourceManager = SourceManager()
+                    currentPath = sourceManager.selection.path
                     k, v = self.imageLoaderConnection.recv()
                     content, batch = k.split("#")
                     if content != "images":
                         continue
+                    if batch == "ScanComplete":
+                        imagesCount, stopped = v
+                        logger.info(f"All batches received: {imagesCount} images - "
+                                    f"Status: {'stopped' if stopped else 'complete'}")
+                        sourceManager.imageScanCompleted.emit(*v)
+                        if stopped:
+                            sourceManager.selection.expectedImagesCount = 0
+                        else:
+                            sourceManager.selection.expectedImagesCount = imagesCount
+                        sourceManager.selection.imageScanStopped = stopped
+                        continue
                     newImages = {path: Image(name, path) for name, path in v if path.startswith(currentPath)}
                     if newImages:
-                        SourceManager().selection.images.update(newImages)
+                        sourceManager.selection.images.update(newImages)
                         logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
                         self.imagesBatchLoaded.emit(
                             newImages,
@@ -296,37 +215,44 @@ class ImageScannerListener(Thread):
 
 
 class ExifLoaderListener(Thread):
-    def __init__(self, conn, datetimeLoaded, thumbnailLoaded):
+    def __init__(self, conn):
         super().__init__()
         self.exifLoaderConnection = conn
-        self.datetimeLoaded = datetimeLoaded
-        self.thumbnailLoaded = thumbnailLoaded
         self.alive = Event()
 
     def run(self):
         self.alive.set()
+        receivedImagesCount = 0
         while self.alive.is_set():
             try:
                 if self.exifLoaderConnection.poll(timeout=0.01):
                     content, data, imageKey = self.exifLoaderConnection.recv()
                     sourceManager = SourceManager()
+                    expectedImagesCount = sourceManager.selection.expectedImagesCount
+                    scanStopped = sourceManager.selection.imageScanStopped
                     try:
                         image = sourceManager.selection.images[imageKey]
                     except KeyError:
                         # selection has been reset or has changed: ignore old data
+                        receivedImagesCount = 0
                         logger.debug(f"{imageKey} is not found in current source selection")
                         continue
                     else:
                         if content == "datetime":
-                            logger.debug(f"Received datetime for image {imageKey}")
+                            receivedImagesCount += 1
+                            logger.debug(f"Received datetime for image {imageKey} "
+                                         f"({receivedImagesCount}/{expectedImagesCount} - "
+                                         f"{'stopped' if scanStopped else 'running'})")
                             image.datetime = data
                             sourceManager.selection.timeline.addDatetime(data)
-                            self.datetimeLoaded.emit(data)
+                            sourceManager.datetimeLoaded.emit(receivedImagesCount, expectedImagesCount)
+                            if scanStopped or receivedImagesCount == expectedImagesCount:
+                                receivedImagesCount = 0
                         elif content == "thumbnail":
                             logger.debug(f"Received thumbnail for image {imageKey}")
                             sourceManager.selection.thumbnailCache[image.path] = data
                             image.loadingInProgress = False
-                            self.thumbnailLoaded.emit(imageKey)
+                            sourceManager.thumbnailLoaded.emit(imageKey)
                         else:
                             logger.warning(f"Received unknown content: {content}")
                             continue
@@ -342,17 +268,16 @@ class ExifLoaderListener(Thread):
 class SourceManager(metaclass=Singleton):
 
     sourceSelected = QtUtil.QtSignalAdapter(Selection)
+    imageScanCompleted = QtUtil.QtSignalAdapter(int, bool)  # imagesCount, status
     imagesBatchLoaded = QtUtil.QtSignalAdapter(dict, str)   # images, msg
     thumbnailLoaded = QtUtil.QtSignalAdapter(str)           # name
-    datetimeLoaded = QtUtil.QtSignalAdapter(tuple)          # name
-    timelineChanged = QtUtil.QtSignalAdapter(TimelineNode)         # name
+    datetimeLoaded = QtUtil.QtSignalAdapter(int, int)
 
     def __init__(self):
         self.devices = dict()
         self.logicalDisks = dict()
 
         self.selection = Selection()
-        self.selection.timeline.childrenChanged.connect(self.timelineChanged)
 
         # Start the image scanner process and establish a Pipe connection with it
         logger.info("Starting image scanner...")
@@ -378,11 +303,7 @@ class SourceManager(metaclass=Singleton):
         child_conn2.close()
 
         # Start a thread listening to the imageScanner process messages
-        self.exifLoaderListener = ExifLoaderListener(
-            exifLoaderConnection,
-            self.datetimeLoaded,
-            self.thumbnailLoaded,
-        )
+        self.exifLoaderListener = ExifLoaderListener(exifLoaderConnection)
         self.exifLoaderListener.start()
 
     def enumerateSources(self, kind: Tuple[DriveType] = None):
@@ -420,6 +341,7 @@ class SourceManager(metaclass=Singleton):
         return list(self.logicalDisks.values())
 
     def selectDevice(self, name: str, eject: bool = False):
+        self.stopScannning()
         try:
             device = self.devices[name]
         except KeyError:
@@ -428,10 +350,10 @@ class SourceManager(metaclass=Singleton):
             self.selection = Selection(device, SourceType.DEVICE)
             self.selection.source.eject = eject
 
-        self.selection.timeline.childrenChanged.connect(SourceManager().timelineChanged)
         self.sourceSelected.emit(self.selection)
 
     def selectDrive(self, driveId: str, path: Path, subDirs: bool = False):
+        self.stopScannning()
         try:
             drive = self.logicalDisks[driveId]
         except KeyError:
@@ -441,15 +363,14 @@ class SourceManager(metaclass=Singleton):
             self.selection.source.selectedPath = path
             self.selection.source.subDirs = subDirs
 
-        self.selection.timeline.childrenChanged.connect(SourceManager().timelineChanged)
         self.sourceSelected.emit(self.selection)
 
     def setDriveSubDirsState(self, state: bool):
-        source = self.selection.source
-        kind = self.selection.kind
+        selection = self.selection
+        source = selection.source
+        kind = selection.kind
         if source and kind == SourceType.DRIVE:
-            source.subDirs = state
-            self.sourceSelected.emit(self.selection)
+            self.selectDrive(source.id, Path(selection.path), subDirs=True)
 
     def setDeviceEjectState(self, state: bool):
         source = self.selection.source
@@ -462,9 +383,14 @@ class SourceManager(metaclass=Singleton):
             (ImageScanner.Command.SCAN, (path.as_posix(), includeSubDirs))
         )
 
+    def stopScannning(self):
+        self.imageScannerConnection.send(
+            (ImageScanner.Command.ABORT, 0)
+        )
+
     def close(self):
         timeline = self.selection.timeline
-        print(timeline, timeline.childCount())
+        print(timeline, timeline.childCount(), timeline.maxWeightByDepth)
         for year in self.selection.timeline:
             print("Year ", year)
             for month in year:

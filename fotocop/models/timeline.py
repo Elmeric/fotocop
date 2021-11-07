@@ -1,7 +1,6 @@
 import logging
 
-from typing import Optional, Tuple, Dict
-from enum import Enum, auto
+from typing import Optional, Tuple, List, Dict
 from functools import total_ordering
 
 from fotocop.util import nodemixin as nd
@@ -10,79 +9,71 @@ from fotocop.util import qtutil as QtUtil
 logger = logging.getLogger(__name__)
 
 
-class NodeKind(Enum):
-    ROOT = auto()
-    YEAR = auto()
-    MONTH = auto()
-    DAY = auto()
-    HOUR = auto()
+NODE_KIND = {
+    0:  "ROOT",
+    1:  "YEAR",
+    2:  "MONTH",
+    3:  "DAY",
+    4:  "HOUR",
+}
+
+
+MONTH_AS_TEXT = {
+    "01": ("January", "Jan"),
+    "02": ("February", "Feb"),
+    "03": ("March", "Mar"),
+    "04": ("April", "Apr"),
+    "05": ("May", "May"),
+    "06": ("June", "Jun"),
+    "07": ("July", "Jul"),
+    "08": ("August", "Aug"),
+    "09": ("September", "Sep"),
+    "10": ("October", "Oct"),
+    "11": ("November", "Nov"),
+    "12": ("December", "Dec"),
+}
 
 
 @total_ordering
 class TimelineNode(nd.NodeMixin):
-    """A node of the timeline has a unique id and a weight (images count)."""
+    """A node of the timeline has a unique id and a weight (images count).
 
-    def __init__(self, id_: str, kind: NodeKind):
+    The depth of the node defines its kind: 0 for the timeline'root, 1 for YEAR,
+        2 for MONTH, 3 for DAY and 4 for HOUR.
+    """
+
+    def __init__(self, id_: str, weight: int = 1):
         self._id = id_
-        self.kind = kind
-        self.weight = 1
-        self._maxChildrenWeight = 1
-        self._maxGrandChildrenWeight = 1
+        self.weight = weight
 
     @property
     def key(self) -> str:
         return self._id
 
     @property
-    def record(self) -> Tuple[str, int]:
-        return self._id, self.weight
+    def kind(self) -> str:
+        try:
+            return NODE_KIND[self.depth]
+        except KeyError:
+            return "UNKNOWN"
 
     @property
-    def maxChildrenWeight(self):
-        return self._maxChildrenWeight
-
-    @maxChildrenWeight.setter
-    def maxChildrenWeight(self, value: int):
-        if value > self._maxChildrenWeight:
-            self._maxChildrenWeight = value
-
-    @property
-    def maxGrandChildrenWeight(self):
-        return self._maxGrandChildrenWeight
-
-    @maxGrandChildrenWeight.setter
-    def maxGrandChildrenWeight(self, value: int):
-        if value > self._maxGrandChildrenWeight:
-            self._maxGrandChildrenWeight = value
-
-    @property
-    def childrenDict(self) -> Dict[str, "TimelineNode"]:
-        return {child.key: child for child in self.children}
-
-    @property
-    def years(self) -> Dict[str, "TimelineNode"]:
-        assert self.kind == NodeKind.ROOT
-        return self.childrenDict
-
-    @property
-    def months(self) -> Dict[str, "TimelineNode"]:
-        assert self.kind == NodeKind.YEAR
-        return self.childrenDict
-
-    @property
-    def days(self) -> Dict[str, "TimelineNode"]:
-        assert self.kind == NodeKind.MONTH
-        return self.childrenDict
-
-    @property
-    def hours(self) -> Dict[str, "TimelineNode"]:
-        assert self.kind == NodeKind.DAY
-        return self.childrenDict
+    def asText(self) -> str:
+        depth = self.depth
+        if depth == 0:
+            return self.key
+        if depth == 1:
+            return f"{self.key}: {self.weight}"
+        if depth == 2:
+            return f"{self.parent.asText}/{MONTH_AS_TEXT[self.key][1]}"
+        if depth == 3:
+            return f"{self.parent.asText}/{self.key}"
+        if depth == 4:
+            return f"{self.parent.asText}-{self.key}h"
+        return ""
 
     def __eq__(self, other: "TimelineNode") -> bool:
         if not isinstance(other, TimelineNode):
-            return NotImplemented
-        if other.kind != self.kind:
             return NotImplemented
         if other.parent != self.parent:
             return False
@@ -90,8 +81,6 @@ class TimelineNode(nd.NodeMixin):
 
     def __lt__(self, other: "TimelineNode") -> bool:
         if not isinstance(other, TimelineNode):
-            return NotImplemented
-        if other.kind != self.kind:
             return NotImplemented
         if other.parent != self.parent:
             return NotImplemented
@@ -105,58 +94,65 @@ class TimelineNode(nd.NodeMixin):
         return any(child.key == key for child in self)
 
     def __repr__(self) -> str:
-        return f"<{self._id}: {self.weight}>"
+        return f"<TimelineNode({self._id}, {self.weight})>"
 
     def __str__(self) -> str:
-        return f"{self._id}: {self.weight}"
+        return f"{self.asText}: {self.weight}"
 
-    def _post_attach(self, parent):
+    def _post_attach(self, parent: "TimelineNode"):
         """Method call after attaching to `parent` to sort children."""
         parent._NodeMixin__children = sorted(parent.children)
 
     def childByKey(self, key: str) -> Optional["TimelineNode"]:
+        """Returns the node's children having the given key, None if not found"""
         for child in self.children:
             if child.key == key:
                 return child
         return None
 
-    def addChild(self, key: Tuple[str, NodeKind], *args):
-        child = self.childByKey(key[0])
+    def addChild(self, maxWeightByDepth: List[int], key: str, *args):
+        """Add (or increment weight) a child with key id to the current node.
+
+        Recursively add child with key in args to the new child.
+        Create the new child if none exists with a key id, oherwise, it only increments
+        its weight.
+        Update the new max weight of children at this depth (depth = kind of child).
+
+        Args:
+            maxWeightByDepth: max weight of children for each depth.
+            key: id of the child to add / update.
+            *args: if not empty, list of node's key to recursively add / update.
+        """
+        child = self.childByKey(key)
         if child is not None:
-            if args:
-                child.addChild(*args)
-            child.weight += 1
-            self.maxChildrenWeight = child.weight
-            if not self.is_root:
-                self.parent.maxGrandChildrenWeight = child.weight
+            # A child exists with that key: update its weight and the max weight of
+            # children at this depth
+            weight = child.weight
+            weight += 1
+            depth = child.depth - 1
+            maxWeightAtDepth = maxWeightByDepth[depth]
+            if weight > maxWeightAtDepth:
+                maxWeightByDepth[depth] = weight
+            child.weight = weight
             logger.debug(
-                f"{key[1].name} {key[0]} added to {self.kind.name} {self.key}, weight is now: {child.weight}"
+                f"{child.kind} {key} exists for {self.kind} {self.key}, weight is now: {weight}"
             )
+            # Recursively add children in args to the updated child
+            if args:
+                child.addChild(maxWeightByDepth, *args)
         else:
-            child = TimelineNode(*key)
+            # Create a new child. Its weight is set to 1 by the constructor
+            child = TimelineNode(key)
             child.parent = self
-            if args:
-                child.addChild(*args)
             logger.debug(
-                f"New {key[1].name} {key[0]} added to {self.kind.name} {self.key}"
+                f"New {child.kind} {key} added to {self.kind} {self.key}"
             )
+            # Recursively add children in args to the created child
+            if args:
+                child.addChild(maxWeightByDepth, *args)
 
     def childCount(self):
         return len(self.children)
-
-    def grandChildCount(self):
-        return sum((child.childCount() for child in self.children))
-
-    def childRow(self):
-        if self.parent is not None:
-            return self.parent.children.index(self, )
-        return 0
-
-    def childAtRow(self, row: int):
-        try:
-            return self.children[row]
-        except IndexError:
-            return None
 
 
 class Timeline(TimelineNode):
@@ -166,31 +162,21 @@ class Timeline(TimelineNode):
     Year children are Month elements, Month children are Day elements and Day children
     are Hour elements.
     """
-
-    childrenChanged = QtUtil.QtSignalAdapter(TimelineNode)            # name
-
     def __init__(self):
-        super().__init__("Timeline", NodeKind.ROOT)
+        super().__init__("Timeline")
         self.weight = 0
+        self.maxWeightByDepth = [1, 1, 1, 1]
 
     def addDatetime(self, dateTime: Tuple[str, str, str, str, str, str]):
-        kind = (NodeKind.YEAR, NodeKind.MONTH, NodeKind.DAY, NodeKind.HOUR)
-        nodes = [(key, kind[i]) for i, key in enumerate(dateTime[:4])]
-        self.addChild(*nodes)
+        """Add a image date/time to the timeline.
+
+        Image's date/time are added as they are retrieved from exif data.
+
+        Args:
+            dateTime: the exif date/time to add to the timeline.
+        """
+        self.addChild(self.maxWeightByDepth, *dateTime[:4])
         self.weight += 1
-        self.childrenChanged.emit(self)
-
-    def addYear(self, year: TimelineNode):
-        """Adds the given year to the year's container."""
-        assert year.kind == NodeKind.YEAR
-        year.parent = self
-
-    @staticmethod
-    def removeYear(year: TimelineNode):
-        """Deletes the given year from the year's container."""
-        assert year.kind == NodeKind.YEAR
-        year.parent = None
-        year.children = []
 
     def clear(self):
         self.children = []

@@ -8,7 +8,7 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.models import settings as Config
 from fotocop.models.sources import Selection
-from .timelineviewer import ZoomLevel
+from .timelineviewer import ZoomLevel, TimelineViewer
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Image
@@ -287,7 +287,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
 class ThumbnailViewer(QtWidgets.QWidget):
 
-    zoomed = QtCore.pyqtSignal(ZoomLevel)
+    zoomLevelChanged = QtCore.pyqtSignal(ZoomLevel)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -341,8 +341,8 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.zoomLevelSelector = QtWidgets.QComboBox()
         for z in ZoomLevel:
-            self.zoomLevelSelector.addItem(z.name,z)
-        # self.zoomLevelSelector.addItems([z.name for z in ZoomLevel])
+            self.zoomLevelSelector.addItem(z.name, z)
+        self.zoomLevelSelector.setCurrentText(TimelineViewer.DEFAULT_ZOOM_LEVEL.name)
 
         hlayout = QtWidgets.QHBoxLayout()
         hlayout.addWidget(self.allBtn)
@@ -364,7 +364,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.toDateSelector.dateChanged.connect(self.setToDate)
         self.filterBtn.toggled.connect(self.toggleFilter)
         self.zoomLevelSelector.activated.connect(
-            lambda: self.zoomed.emit(self.zoomLevelSelector.currentData())
+            lambda: self.zoomLevelChanged.emit(self.zoomLevelSelector.currentData())
         )
 
         self.allBtn.setEnabled(False)
@@ -427,7 +427,6 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(ZoomLevel)
     def onZoomLevelChanged(self, zoomLevel: ZoomLevel):
-        print(f"In Thumbnail viewer, zoom level is now: {zoomLevel.name}")
         self.zoomLevelSelector.setCurrentText(zoomLevel.name)
 
 

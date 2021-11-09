@@ -1,9 +1,7 @@
 import logging
 import time
 
-from typing import Optional, Tuple, List, Union, Iterator
-from datetime import datetime
-from collections import Counter
+from typing import Optional, Tuple, List,  Union
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from pathlib import Path
@@ -73,20 +71,26 @@ class Selection:
     source: Optional[Union[Device, LogicalDisk]] = None
     kind: SourceType = SourceType.UNKNOWN
 
+    THUMBNAIL_CACHE_SIZE = 50
+
     def __post_init__(self):
         self.images = dict()
-        self.expectedImagesCount = 0
-        self.imageScanStopped = False
         self.timeline = Timeline()
-        self.thumbnailCache = LRUCache(50)
+        self.thumbnailCache = LRUCache(Selection.THUMBNAIL_CACHE_SIZE)
+
+        self._requestedExifCount = 0
+        self._receivedExifCount = 0
+
+    def __len__(self) -> int:
+        return len(self.images)
 
     @property
     def path(self) -> str:
         source = self.source
-        kind = self.kind
         if source is None:
             return ''
 
+        kind = self.kind
         if kind == SourceType.DEVICE:
             return source.logicalDisk.path.as_posix()
         elif kind == SourceType.DRIVE:
@@ -94,22 +98,72 @@ class Selection:
         else:
             return ''
 
-    def getImages(self):
-        source = self.source
-        kind = self.kind
-        if source is None:
-            return
+    def updateImages(self, batch: int, images: List[Tuple[str, str]]):
+        currentPath = self.path
+        newImages = {path: Image(name, path) for name, path in images if path.startswith(currentPath)}
+        if newImages:
+            self.images.update(newImages)
+            logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
+            SourceManager().imagesBatchLoaded.emit(
+                newImages,
+                f"images from batch {batch} containing {len(newImages)} images"
+            )
 
-        if kind == SourceType.DEVICE:
-            path = source.logicalDisk.path
-            subDirs = True
-        elif kind == SourceType.DRIVE:
-            path = source.selectedPath
-            subDirs = source.subDirs
+    def loadExifs(self):
+        logger.info(f"Loading exif for {self.path}...")
+        self._receivedExifCount = 0                                              # noqa
+        requestedExifCount = 0
+        for n, image in enumerate(self.images.values()):
+            if not image.isLoaded and not image.loadingInProgress:
+                image.loadingInProgress = True
+                requestedExifCount += 1
+                if requestedExifCount < Selection.THUMBNAIL_CACHE_SIZE:
+                    # Load both datetime and thumbnail while the thumbnails cache is not full.
+                    image.getExif(ExifLoader.Command.LOAD_ALL)
+                else:
+                    # Load only datetime once the thumbnails cache is full.
+                    image.getExif(ExifLoader.Command.LOAD_DATE)
+            else:
+                logger.info(f"Datetime yet loaded for {image.name}: skipped")
+        self._requestedExifCount = requestedExifCount                            # noqa
+        logger.info(f"{requestedExifCount} exif load requests sent for {self.path}")
+
+    def receiveDatetime(self, imageKey: str, datetime_):
+        try:
+            image = self.images[imageKey]
+        except KeyError:
+            # selection has been reset or has changed: ignore old data
+            self._receivedExifCount = 0
+            logger.debug(f"{imageKey} is not found in current source selection")
         else:
-            return
+            receivedExifCount = self._receivedExifCount
+            requestedExifCount = self._requestedExifCount
+            # scanStopped = self.imageScanStopped
+            receivedExifCount += 1
+            logger.debug(f"Received datetime for image {imageKey} "
+                         f"({receivedExifCount}/{requestedExifCount}")
+            image.datetime = datetime_
+            image.loadingInProgress = False
+            self.addToTimeline(datetime_, receivedExifCount)
+            if receivedExifCount == requestedExifCount:
+                receivedExifCount = 0
+            self._receivedExifCount = receivedExifCount                          # noqa
 
-        SourceManager().scanImages(path, subDirs)
+    def addToTimeline(self, dateTime: Tuple[str, str, str, str, str, str], imageIndex):
+        self.timeline.addDatetime(dateTime)
+        SourceManager().datetimeLoaded.emit(imageIndex, self._requestedExifCount)
+
+    def receiveThumbnail(self, imageKey: int, thumbnail):
+        try:
+            image = self.images[imageKey]
+        except KeyError:
+            # selection has been reset or has changed: ignore old data
+            logger.debug(f"{imageKey} is not found in current source selection")
+        else:
+            logger.debug(f"Received thumbnail for image {imageKey}")
+            self.thumbnailCache[image.path] = thumbnail
+            image.loadingInProgress = False
+            SourceManager().thumbnailLoaded.emit(imageKey)
 
 
 @dataclass()
@@ -123,10 +177,14 @@ class Image:
         self.loadingInProgress = False
 
     @property
+    def isLoaded(self) -> bool:
+        return self._datetime is not None
+
+    @property
     def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:
         if self._datetime is None:
             if not self.loadingInProgress:
-                logger.debug(f"Thumbnail cache missed for image: {self.name}")
+                logger.debug(f"Datetime cache missed for image: {self.name}")
                 self.loadingInProgress = True   # noqa
                 SourceManager().exifLoaderConnection.send(
                     (ExifLoader.Command.LOAD_DATE, (self.name, self.path))
@@ -139,7 +197,12 @@ class Image:
     def datetime(self, value: Optional[Tuple[str, str, str, str, str, str]]):
         self._datetime = value  # noqa
 
-    def getThumbnail(self) -> Tuple[Optional[bytes], float, int]:
+    def getExif(self, command: ExifLoader.Command):
+        SourceManager().exifLoaderConnection.send(
+            (command, (self.name, self.path))
+        )
+
+    def getThumbnail(self) -> Tuple[Optional[Union[bytes, str]], float, int]:
         name = self.name
         path = self.path
         sourceManager = SourceManager()
@@ -160,17 +223,17 @@ class Image:
                 )
             else:
                 logger.debug(f"Loading in progress: {name}")
-            return "loading", 0, 0
+            return "loading", 0.0, 0
         else:
             logger.debug(f"Got image: {self.name} {aspectRatio} {orientation} from cache")
             return imgdata, aspectRatio, orientation
 
 
 class ImageScannerListener(Thread):
-    def __init__(self, conn, imagesBatchLoaded):
+    def __init__(self, conn):
         super().__init__()
+        self.name = "ImageScannerListener"
         self.imageLoaderConnection = conn
-        self.imagesBatchLoaded = imagesBatchLoaded
         self.alive = Event()
 
     def run(self):
@@ -178,33 +241,21 @@ class ImageScannerListener(Thread):
         while self.alive.is_set():
             try:
                 if self.imageLoaderConnection.poll(timeout=0.01):
-                    sourceManager = SourceManager()
-                    currentPath = sourceManager.selection.path
-                    k, v = self.imageLoaderConnection.recv()
-                    content, batch = k.split("#")
-                    if content != "images":
-                        continue
-                    if batch == "ScanComplete":
-                        imagesCount, stopped = v
-                        logger.info(f"All batches received: {imagesCount} images - "
-                                    f"Status: {'stopped' if stopped else 'complete'}")
-                        sourceManager.imageScanCompleted.emit(*v)
-                        if stopped:
-                            sourceManager.selection.expectedImagesCount = 0
+                    header, data = self.imageLoaderConnection.recv()
+                    content, batch = header.split("#")
+
+                    if content == "images":
+
+                        if batch == "ScanComplete":
+                            # All images received for current selection
+                            SourceManager().scanComplete(*data)
                         else:
-                            sourceManager.selection.expectedImagesCount = imagesCount
-                        sourceManager.selection.imageScanStopped = stopped
-                        continue
-                    newImages = {path: Image(name, path) for name, path in v if path.startswith(currentPath)}
-                    if newImages:
-                        sourceManager.selection.images.update(newImages)
-                        logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
-                        self.imagesBatchLoaded.emit(
-                            newImages,
-                            f"images from batch {batch} containing {len(newImages)} images"
-                        )
-                        for image in newImages.values():
-                            image.getThumbnail()
+                            # New images batch received for current selection
+                            SourceManager().selection.updateImages(batch, data)
+
+                    else:
+                        logger.warning(f"Received unknown content: {content}")
+
             except (OSError, EOFError, BrokenPipeError):
                 self.alive.clear()
 
@@ -217,45 +268,27 @@ class ImageScannerListener(Thread):
 class ExifLoaderListener(Thread):
     def __init__(self, conn):
         super().__init__()
+        self.name = "ExifLoaderListener"
         self.exifLoaderConnection = conn
         self.alive = Event()
 
     def run(self):
         self.alive.set()
-        receivedImagesCount = 0
         while self.alive.is_set():
             try:
                 if self.exifLoaderConnection.poll(timeout=0.01):
                     content, data, imageKey = self.exifLoaderConnection.recv()
                     sourceManager = SourceManager()
-                    expectedImagesCount = sourceManager.selection.expectedImagesCount
-                    scanStopped = sourceManager.selection.imageScanStopped
-                    try:
-                        image = sourceManager.selection.images[imageKey]
-                    except KeyError:
-                        # selection has been reset or has changed: ignore old data
-                        receivedImagesCount = 0
-                        logger.debug(f"{imageKey} is not found in current source selection")
-                        continue
+
+                    if content == "datetime":
+                        sourceManager.selection.receiveDatetime(imageKey, data)
+
+                    elif content == 'thumbnail':
+                        sourceManager.selection.receiveThumbnail(imageKey, data)
+
                     else:
-                        if content == "datetime":
-                            receivedImagesCount += 1
-                            logger.debug(f"Received datetime for image {imageKey} "
-                                         f"({receivedImagesCount}/{expectedImagesCount} - "
-                                         f"{'stopped' if scanStopped else 'running'})")
-                            image.datetime = data
-                            sourceManager.selection.timeline.addDatetime(data)
-                            sourceManager.datetimeLoaded.emit(receivedImagesCount, expectedImagesCount)
-                            if scanStopped or receivedImagesCount == expectedImagesCount:
-                                receivedImagesCount = 0
-                        elif content == "thumbnail":
-                            logger.debug(f"Received thumbnail for image {imageKey}")
-                            sourceManager.selection.thumbnailCache[image.path] = data
-                            image.loadingInProgress = False
-                            sourceManager.thumbnailLoaded.emit(imageKey)
-                        else:
-                            logger.warning(f"Received unknown content: {content}")
-                            continue
+                        logger.warning(f"Received unknown content: {content}")
+
             except (OSError, EOFError, BrokenPipeError):
                 self.alive.clear()
 
@@ -268,7 +301,7 @@ class ExifLoaderListener(Thread):
 class SourceManager(metaclass=Singleton):
 
     sourceSelected = QtUtil.QtSignalAdapter(Selection)
-    imageScanCompleted = QtUtil.QtSignalAdapter(int, bool)  # imagesCount, status
+    imageScanCompleted = QtUtil.QtSignalAdapter(int)        # imagesCount
     imagesBatchLoaded = QtUtil.QtSignalAdapter(dict, str)   # images, msg
     thumbnailLoaded = QtUtil.QtSignalAdapter(str)           # name
     datetimeLoaded = QtUtil.QtSignalAdapter(int, int)
@@ -288,10 +321,7 @@ class SourceManager(metaclass=Singleton):
         child_conn1.close()
 
         # Start a thread listening to the imageScanner process messages
-        self.imagesScannerListener = ImageScannerListener(
-            imageScannerConnection,
-            self.imagesBatchLoaded,
-        )
+        self.imagesScannerListener = ImageScannerListener(imageScannerConnection)
         self.imagesScannerListener.start()
 
         # Start the exif loader process and establish a Pipe connection with it
@@ -302,7 +332,7 @@ class SourceManager(metaclass=Singleton):
         self.exifLoader.start()
         child_conn2.close()
 
-        # Start a thread listening to the imageScanner process messages
+        # Start a thread listening to the exifLoader process messages
         self.exifLoaderListener = ExifLoaderListener(exifLoaderConnection)
         self.exifLoaderListener.start()
 
@@ -349,6 +379,8 @@ class SourceManager(metaclass=Singleton):
         else:
             self.selection = Selection(device, SourceType.DEVICE)
             self.selection.source.eject = eject
+            path = self.selection.source.logicalDisk.path
+            self.scanImages(path, includeSubDirs=True)
 
         self.sourceSelected.emit(self.selection)
 
@@ -362,6 +394,7 @@ class SourceManager(metaclass=Singleton):
             self.selection = Selection(drive, SourceType.DRIVE)
             self.selection.source.selectedPath = path
             self.selection.source.subDirs = subDirs
+            self.scanImages(path, subDirs)
 
         self.sourceSelected.emit(self.selection)
 
@@ -370,7 +403,7 @@ class SourceManager(metaclass=Singleton):
         source = selection.source
         kind = selection.kind
         if source and kind == SourceType.DRIVE:
-            self.selectDrive(source.id, Path(selection.path), subDirs=True)
+            self.selectDrive(source.id, Path(selection.path), subDirs=state)
 
     def setDeviceEjectState(self, state: bool):
         source = self.selection.source
@@ -387,6 +420,13 @@ class SourceManager(metaclass=Singleton):
         self.imageScannerConnection.send(
             (ImageScanner.Command.ABORT, 0)
         )
+
+    def scanComplete(self, imagesCount: int, isStopped: bool):
+        logger.info(f"All batches received: {imagesCount} images - "
+                    f"Status: {'stopped' if isStopped else 'complete'}")
+        if not isStopped:
+            self.imageScanCompleted.emit(imagesCount)
+            self.selection.loadExifs()
 
     def close(self):
         timeline = self.selection.timeline

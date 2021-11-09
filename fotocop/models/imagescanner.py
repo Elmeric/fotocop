@@ -79,7 +79,7 @@ class ScanHandler(StoppableThread):
 
 class ImageScanner(Process):
 
-    BATCH_SIZE = 10
+    BATCH_SIZE = 500
 
     class Command(Enum):
         STOP = auto()   # Stop ImageScanner process
@@ -133,6 +133,7 @@ class ImageScanner(Process):
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping image scanner...")
+                self._stopScanning()
                 self._exitProcess.set()
             elif action == self.Command.ABORT:
                 # Stop scanning images
@@ -150,10 +151,10 @@ class ImageScanner(Process):
         scanHandler = self._scanHandler
         if scanHandler and scanHandler.is_alive():
             path = scanHandler.path
-            logger.debug(f"Stop scan handler for {path}")
+            logger.info(f"Stopping {path} scan handler...")
             scanHandler.stop()
             scanHandler.join(timeout=0.5)
             if scanHandler.is_alive():
                 logger.warning(f"Cannot join scan handler for {path}")
             else:
-                logger.debug(f"Join scan handler for {path}")
+                logger.info(f"{path} scan handler stopped")

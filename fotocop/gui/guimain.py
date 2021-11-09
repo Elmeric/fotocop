@@ -101,6 +101,7 @@ class QtMainView(QtWidgets.QMainWindow):
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.timelineViewer.onSourceSelected)
         self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
+        # self.sourceManager.imageScanCompleted.connect(self.timelineViewer.buildTimeline)
         self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
         self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
         self.thumbnailViewer.zoomLevelChanged.connect(self.timelineViewer.zoom)

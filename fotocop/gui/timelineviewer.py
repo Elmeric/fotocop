@@ -95,7 +95,7 @@ class TimelineViewer(QtWidgets.QWidget):
         timeline = self._timeline
         scene, isLoaded = self._scenes[zoomLevel]
         if timeline is not None and not isLoaded:
-            print(f"{zoomLevel.name} scene not yet loaded: populate it")
+            # print(f"{zoomLevel.name} scene not yet loaded: populate it")
             scene.populate(timeline, zoomLevel)
         else:
             print(f"{zoomLevel.name} scene is loaded: no need to populate it")

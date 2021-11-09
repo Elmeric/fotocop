@@ -60,16 +60,16 @@ class ImageModel(QtCore.QAbstractListModel):
             return images[row].name
 
         if role == QtCore.Qt.UserRole:
-            logger.debug(f"Access to UserRole for {images[row].name}")
+            # logger.debug(f"Access to UserRole for {images[row].name}")
             return images[row].getThumbnail()
 
-        if role == QtCore.Qt.ToolTipRole:
-            dateTime = images[row].datetime
-            if dateTime:
-                year, month, day, hour, minute, second = dateTime
-                return f"{year}{month}{day}-{hour}{minute}{second}"
-            else:
-                return None
+        # if role == QtCore.Qt.ToolTipRole:
+        #     dateTime = images[row].datetime
+        #     if dateTime:
+        #         year, month, day, hour, minute, second = dateTime
+        #         return f"{year}{month}{day}-{hour}{minute}{second}"
+        #     else:
+        #         return None
 
         if role == QtCore.Qt.CheckStateRole:
             if images[row].isSelected:
@@ -116,19 +116,20 @@ class ImageModel(QtCore.QAbstractListModel):
         if found:
             index = self.index(row, 0)
             self.dataChanged.emit(index, index, (QtCore.Qt.UserRole, QtCore.Qt.ToolTipRole))
-        # self.layoutChanged.emit()
 
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        resources = Config.fotocopSettings.resources
+        self.dummyImage = QtGui.QPixmap(f"{resources}/dummy-image.png")
 
     def paint(self, painter, option, index):
         imageName = index.data(QtCore.Qt.DisplayRole)
         imageThumb, aspectRatio, orientation = index.data(QtCore.Qt.UserRole)
 
-        resources = Config.fotocopSettings.resources
-
         if imageThumb == "loading":
-            px = QtGui.QPixmap(f"{resources}/dummy-image.png")
+            px = self.dummyImage
             px = px.scaledToWidth(THUMB_WIDTH)
         else:
             px = QtGui.QPixmap()
@@ -374,12 +375,10 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.filterBtn.setChecked(False)
 
     @QtCore.pyqtSlot(Selection)
-    def onSourceSelected(self, selection):
+    def onSourceSelected(self, _selection):
         self.thumbnailView.model().sourceModel().clearImages()
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
-        # self.selectedImagesSource = selection
-        selection.getImages()
 
     @QtCore.pyqtSlot(dict, str)
     def addImages(self, images, msg):

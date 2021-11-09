@@ -29,7 +29,7 @@ class _LogServer(mp.Process):
         logging_format = '%(processName)-15s%(levelname)s: %(message)s'
         logging_date_format = '%Y-%m-%d %H:%M:%S'
         # file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(name)s %(filename)s %(lineno)d: %(message)s'
-        file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(message)s'
+        file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(threadName)-20s %(message)s'
 
         root = logging.getLogger()
         filehandler = logging.FileHandler(self.logFile, mode='w')

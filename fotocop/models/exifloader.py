@@ -54,9 +54,9 @@ class ExifLoader(Process):
                 break
 
         self.conn.close()
-        logger.info("Exif loader stopped")
         logger.info("Stopping ExifTool...")
         self.exifTool.terminate()
+        logger.info("Exif loader stopped")
 
     def handleCommand(self):
         """Poll the ExifLoader connection for task message.

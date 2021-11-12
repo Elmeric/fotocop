@@ -97,6 +97,7 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self.timelineViewer = TimelineViewer()
 
+        self.sourceManager.sourceEnumerated.connect(self.sourceSelector.onSourcesEnumerated)
         self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
         self.sourceManager.sourceSelected.connect(self.timelineViewer.onSourceSelected)
@@ -104,6 +105,7 @@ class QtMainView(QtWidgets.QMainWindow):
         # self.sourceManager.imageScanCompleted.connect(self.timelineViewer.buildTimeline)
         self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
         self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
+        self.sourceManager.timelineBuilt.connect(self.timelineViewer.finalizeTimeline)
         self.thumbnailViewer.zoomLevelChanged.connect(self.timelineViewer.zoom)
         self.timelineViewer.zoomed.connect(self.thumbnailViewer.onZoomLevelChanged)
 
@@ -220,14 +222,18 @@ class QtMainView(QtWidgets.QMainWindow):
         helpToolbar.addSeparator()
         helpToolbar.addAction(helpAboutAction)
 
-        # Build the status bar and its button to show the console view.
-        # self.consoleButton = QtWidgets.QToolButton()
-        # self.consoleButton.setDefaultAction(showConsoleAction)
-        # self.status = self.statusBar()
-        # self.status.setSizeGripEnabled(False)
-        # self.status.addPermanentWidget(self.vcsController)
-        # self.status.addPermanentWidget(self.consoleButton)
-        # self.status.messageChanged.connect(self.onStatusChanged)  # noqa
+        # Build the status bar.
+        actionProgressBar = QtUtil.BackgroundProgressBar()
+        actionProgressBar.hide()
+        self.sourceManager.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
+        self.sourceManager.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
+        self.sourceManager.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
+
+        self.status = self.statusBar()
+        self.status.setSizeGripEnabled(False)
+        self.status.addPermanentWidget(actionProgressBar)
+        self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
+        self.status.messageChanged.connect(self.onStatusChanged)
 
         splash.setProgress(50)
 
@@ -238,14 +244,16 @@ class QtMainView(QtWidgets.QMainWindow):
 
         Called on an immediate timer once the main windows is built.
         """
-        # self.hideConsole()
-
         self.splash.setProgress(70)
 
         settings = Config.fotocopSettings
 
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
+
+        self.splash.setProgress(80)
+
+        QtCore.QTimer.singleShot(1000, self.sourceManager.enumerateSources)
 
         self.splash.setProgress(100)
 
@@ -266,54 +274,24 @@ class QtMainView(QtWidgets.QMainWindow):
     def showMessage(self, msg: str, isWarning: bool = False, delay: int = None):
         """Convenient function to display a status message.
 
-        Historize the message and show it in the console when visible.
-        Otherwise, display a temporary message in the status bar with the right
-        style and set the console toggle in WARNING_COLOR to
-        indicate the presence of a new warning message in the history.
+        Display a temporary message in the status bar with the right
+        style.
 
         Args:
             msg: the message string to display.
             isWarning: True when the message is a warning
                 (displayed in WARNING_MSG_STYLE for a longer default time).
-            delay: the time to keep the message displayed when the console is
-                hidden (default is 5s for an information and 2s for a warning).
+            delay: the time to keep the message displayed
+                (default is 5s for an information and 2s for a warning).
+
         """
-        # if msg:
-        #     severity = dt.MsgSeverity.WARNING if isWarning else dt.MsgSeverity.INFO
-        #     self.msgHistory.historize(
-        #         Message(severity, msg)
-        #     )
-        if not self.isConsoleVisible:
-            if isWarning:
-                self.status.setStyleSheet(dt.WARNING_MSG_STYLE)
-                self.consoleButton.setStyleSheet(
-                    f"QToolButton{{background:rgba{dt.WARNING_COLOR};}}"
-                )
-            else:
-                self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
-                self.consoleButton.setStyleSheet(
-                    f"QToolButton{{background:rgba{dt.DEFAULT_COLOR};}}"
-                )
-            if not delay:
-                delay = dt.WARNING_MSG_DELAY if isWarning else dt.DEFAULT_MSG_DELAY
-            self.status.showMessage(msg, delay)
-
-    def showCommandReport(self, cmdReport: dt.CommandReport):
-        """Show a command report in the console or the status bar.
-
-        The displayed message is the command report reason.
-        For a warning report with an empty reason, the command report status
-        name is displayed
-
-        Args:
-            cmdReport: the ommand report to be displayed
-        """
-        msg = cmdReport.reason
-        status = cmdReport.status
-        isWarning = status is not dt.CommandStatus.COMPLETED
-        if not msg:
-            msg = cmdReport.status.name if isWarning else "Command success!"
-        self.showMessage(msg, isWarning)
+        if isWarning:
+            self.status.setStyleSheet(dt.WARNING_MSG_STYLE)
+        else:
+            self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
+        if not delay:
+            delay = dt.WARNING_MSG_DELAY if isWarning else dt.DEFAULT_MSG_DELAY
+        self.status.showMessage(msg, delay)
 
     def okToContinue(self) -> bool:
         """Authorize app exit, project creation or loading.

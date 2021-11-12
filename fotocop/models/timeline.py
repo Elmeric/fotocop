@@ -65,7 +65,7 @@ class TimelineNode(nd.NodeMixin):
         if depth == 1:
             return f"{self.key}: {self.weight}"
         if depth == 2:
-            return f"{self.parent.asText}/{MONTH_AS_TEXT[self.key][1]}"
+            return f"{self.parent.key}/{MONTH_AS_TEXT[self.key][1]}"
         if depth == 3:
             return f"{self.parent.asText}/{self.key}"
         if depth == 4:

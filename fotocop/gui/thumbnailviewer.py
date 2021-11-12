@@ -44,7 +44,7 @@ class ImageModel(QtCore.QAbstractListModel):
 
     def flags(self, index):
         if index.isValid():
-            return super().flags(index) | QtCore.Qt.ItemIsUserCheckable
+            return super().flags(index) | QtCore.Qt.ItemIsUserCheckable         # noqa
         return super().flags(index)
 
     def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.DisplayRole) -> Any:
@@ -90,7 +90,7 @@ class ImageModel(QtCore.QAbstractListModel):
             image = self.images[row]
             isSelected = True if value == QtCore.Qt.Checked else False
             image.isSelected = isSelected
-            print(f"    > {image.name} check state is {isSelected}")
+            # print(f"    > {image.name} check state is {isSelected}")
             self.dataChanged.emit(index, index, (role,))
             return True
 
@@ -210,7 +210,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.setPen(defaultPen)
 
-        # Checkstate
+        # Check state
         # https://stackoverflow.com/questions/57793643/position-qcheckbox-top-left-of-item-in-qlistview
         if state is not None:
             opt = QtWidgets.QStyleOptionViewItem()
@@ -328,7 +328,11 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.thumbnailView.setModel(proxyModel)
 
         self.allBtn = QtWidgets.QPushButton("All")
+        self.allBtn.setToolTip("Select all images")
+        self.allBtn.setStatusTip("Select all images")
         self.noneBtn = QtWidgets.QPushButton("None")
+        self.noneBtn.setToolTip("Deselect all images")
+        self.noneBtn.setStatusTip("Deselect all images")
         self.filterBtn = QtWidgets.QToolButton()
         self.filterBtn.setIconSize(iconSize)
         self.filterBtn.setIcon(filterIcon)
@@ -380,9 +384,8 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
 
-    @QtCore.pyqtSlot(dict, str)
-    def addImages(self, images, msg):
-        self.logger.debug(f">>> Adding images to viewer: {msg}")
+    @QtCore.pyqtSlot(dict)
+    def addImages(self, images):
         images = list(images.values())
         self.thumbnailView.model().sourceModel().addImages(images)
         self.allBtn.setEnabled(True)
@@ -390,7 +393,6 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(str)
     def updateImage(self, imageKey: str):
-        self.logger.debug(f">>> Updating images: {imageKey}")
         self.thumbnailView.model().sourceModel().updateImage(imageKey)
 
     @QtCore.pyqtSlot()
@@ -451,7 +453,7 @@ class ThumbnailView(QtWidgets.QListView):
             # Must set this to False before adjusting the selection!
             self.possiblyPreserveSelectionPostClick = False
 
-            print("Selection preserved")
+            # print("Selection preserved")
             current = self.currentIndex()
             if not(len(selected.indexes()) == 1 and selected.indexes()[0] == current):
                 deselected.merge(self.selectionModel().selection(), QtCore.QItemSelectionModel.Select)
@@ -488,7 +490,7 @@ class ThumbnailView(QtWidgets.QListView):
                 checkboxClicked = checkboxRect.contains(event.pos())
 
                 if checkboxClicked:
-                    print("Preserving selection")
+                    # print("Preserving selection")
                     self.possiblyPreserveSelectionPostClick = True
                     selected = self.selectionModel().selection()
                     model = self.model()

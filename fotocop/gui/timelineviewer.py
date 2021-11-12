@@ -60,15 +60,16 @@ class TimelineViewer(QtWidgets.QWidget):
         self._timeline = timeline
         self.setScene(clearBefore=True)
 
-    @QtCore.pyqtSlot(int, int)
-    def updateTimeline(self, received: int, expected: int):
+    @QtCore.pyqtSlot()
+    def updateTimeline(self):
         self.setScene(clearBefore=True)
-        if received == expected:
-            for zoomLevel in ZoomLevel:
-                if zoomLevel != self._zoomLevel:
-                    self._scenes[zoomLevel][0].populate(self._timeline, zoomLevel)
-                self._scenes[zoomLevel][1] = True   # isLoaded status
-            print(f"***** Scenes are loaded")
+
+    @QtCore.pyqtSlot()
+    def finalizeTimeline(self):
+        for zoomLevel in ZoomLevel:
+            self._scenes[zoomLevel][0].populate(self._timeline, zoomLevel)
+            self._scenes[zoomLevel][1] = True  # isLoaded status
+        print(f"***** Scenes are loaded")
 
     @QtCore.pyqtSlot(ZoomLevel)
     def zoom(self, zoomLevel: ZoomLevel):
@@ -216,7 +217,7 @@ class FlowChainView(QtWidgets.QGraphicsView):
 
 class NodeGeometry:
 
-    MIN_BAR_HEIGHT = 20
+    MIN_BAR_HEIGHT = 10
 
     def __init__(self, node: 'Node'):
         super().__init__()
@@ -320,7 +321,7 @@ class NodeGraphicsObject(QtWidgets.QGraphicsObject):
 
         self.setZValue(0)
 
-        self.setToolTip(node.caption)
+        self.setToolTip(node.tooltip)
 
     def boundingRect(self) -> QtCore.QRectF:
         return self.node.geometry.boundingRect
@@ -334,7 +335,6 @@ class NodeGraphicsObject(QtWidgets.QGraphicsObject):
         self.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         node = self.node
         if isinstance(node, LeafNode):
-        # if node.kind == NodeKind.MONTH:
             node.geometry.hovered = True
             self.update()
         event.accept()
@@ -345,7 +345,6 @@ class NodeGraphicsObject(QtWidgets.QGraphicsObject):
         self.setCursor(QtGui.QCursor())
         node = self.node
         if isinstance(node, LeafNode):
-        # if node.kind == NodeKind.MONTH:
             node.geometry.hovered = False
             self.update()
         event.accept()
@@ -362,7 +361,6 @@ class NodeGraphicsObject(QtWidgets.QGraphicsObject):
         painter.setClipRect(option.exposedRect)
         NodeGraphicsObject.drawNodeRect(painter, geometry, self.node.color, self.isSelected())
         if isinstance(node, BranchNode):
-        # if node.kind == NodeKind.YEAR:
             NodeGraphicsObject.drawNodeCaption(painter, geometry, node.caption)
 
     @classmethod
@@ -383,7 +381,8 @@ class NodeGraphicsObject(QtWidgets.QGraphicsObject):
         color = QtGui.QColor("deepskyblue") if isSelected else nodeColor
         color = color.darker(150) if geometry.hovered else color
 
-        painter.setPen(QtCore.Qt.NoPen)
+        painter.setPen(QtGui.QColor(128, 128, 128))
+        # painter.setPen(QtCore.Qt.NoPen)
         painter.setBrush(color)
 
         painter.drawRect(QtCore.QRectF(0, 0, geometry.width, geometry.height))
@@ -480,6 +479,10 @@ class Node:
         # return self.timelineNode.key
 
     @property
+    def tooltip(self) -> str:
+        return NotImplemented
+
+    @property
     def size(self) -> QtCore.QSizeF:
         return self.geometry.size
 
@@ -534,6 +537,10 @@ class BranchNode(Node):
     def color(self):
         return QtGui.QColor(220, 220, 220)
 
+    @property
+    def tooltip(self) -> str:
+        return self.timelineNode.asText
+
 
 class LeafNode(Node):
 
@@ -561,6 +568,10 @@ class LeafNode(Node):
     def color(self):
         return QtGui.QColor(190, 190, 190)
 
+    @property
+    def tooltip(self) -> str:
+        return f"{self.timelineNode.asText} ({self.timelineNode.weight})"
+
 
 class FlowChainScene(QtWidgets.QGraphicsScene):
     def __init__(self, parent=None):
@@ -579,7 +590,6 @@ class FlowChainScene(QtWidgets.QGraphicsScene):
 
     def populate(self, timeline: Timeline, zoomLevel: ZoomLevel):
         rootItem = sceneFactory.create(zoomLevel, self, timeline)
-        # rootKind, leafKind = FlowChainScene.ZOOM_TO_NODE_KIND[zoomLevel]
 
     def populateYear(self, timeline: Timeline):
         offsetY = 0
@@ -682,11 +692,11 @@ class FlowChainScene(QtWidgets.QGraphicsScene):
             item.node for item in self.selectedItems()
             if isinstance(item, NodeGraphicsObject)
         ]
+
     @QtCore.pyqtSlot()
     def onSelectionChanged(self):
         for node in self.selectedNodes():
             if isinstance(node, BranchNode):
-            # if node.kind == NodeKind.YEAR:
                 node.graphicsObject.setSelected(False)
                 for child in node.graphicsObject.childItems():
                     child.setSelected(True)

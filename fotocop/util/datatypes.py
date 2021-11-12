@@ -10,14 +10,18 @@ from pathlib import Path
 #
 DEFAULT_COLOR = (0, 0, 0, 0)
 DEFAULT_MSG_STYLE = f"""
-    QStatusBar{{padding-left:8px;
+    QStatusBar{{
+    border-top:2px solid darkgray;
+    padding-left:8px;
     background:rgba{DEFAULT_COLOR};
     color:black;
     font-weight:bold;}}
 """
 WARNING_COLOR = (255, 153, 153, 255)
 WARNING_MSG_STYLE = f"""
-    QStatusBar{{padding-left:8px;
+    QStatusBar{{
+    border-top :2px solid darkgray;
+    padding-left:8px;
     background:rgba{WARNING_COLOR};
     color:black;
     font-weight:bold;}}

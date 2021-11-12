@@ -1773,99 +1773,70 @@ class QtSignalAdapter:
         return getattr(self.qtSignal, self.name)
 
 
-class TimelineView(QtWidgets.QWidget):
+class BackgroundProgressBar(QtWidgets.QWidget):
 
-    barColor = QtGui.QColor(127, 0, 127)
+    progressValueChanged = QtCore.pyqtSignal(int)
 
-    def __init__(self, timeline: Optional[Counter] = None, parent = None):
+    def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._timeline = timeline
-        if timeline is None:
-            self._start = date.today() - timedelta(days=30)
-            self._end = date.today()
-            self._minY = self._maxY = 0
-        else:
-            self.setTimeline(timeline)
-        self._margin = 8
+        self.hidingTimer = QtCore.QTimer(parent=self)
+        self.hidingTimer.setSingleShot(True)
+        self.hidingTimer.timeout.connect(self.hide)
 
-        self.setWindowTitle("Timeline")
-        self.resize(600, 200)
+        self.msgLbl = QtWidgets.QLabel()
+        self.msgLbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        f = QtGui.QFont()
+        f.setBold(True)
+        self.msgLbl.setFont(f)
 
-    def setTimeline(self, timeline: Counter):
-        self._timeline = timeline
-        self._start = list(timeline.keys())[0]
-        self._end = list(timeline.keys())[-1]
-        self._x, self._y = zip(*timeline.most_common())
-        self._minY = min(*self._y)
-        self._maxY = max(*self._y)
-        self.update()
+        self.progressBar = QtWidgets.QProgressBar()
+        self.progressBar.setMaximumWidth(150)
+        self.progressBar.setFixedHeight(15)
 
-    def getStart(self) -> date:
-        return self._start
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.addWidget(self.msgLbl)
+        layout.addWidget(self.progressBar)
 
-    def getEnd(self) -> date:
-        return self._end
+        self.setLayout(layout)
 
-    def paintEvent(self, event):
-        width = self.width()
-        height = self.height()
-        margin = self._margin
-        barWidth = 20
-        start = self._start
-        end = self._end
-        points = zip(self._x, self._y)
-        scaleX = width / ((end - start) / timedelta(days=1))
-        scaleY = (height - 2*margin) / self._maxY
+        self._minProgressStep = 5
 
-        background = QtGui.QBrush(QtGui.QColor(127, 127, 127))
-        foreground = QtGui.QBrush(self.barColor)
-        # foreground = QtGui.QPen(self.barColor)
-        # textPen = QtGui.QPen(option.palette.color(QtGui.QPalette.Text))
-        # highlightedPen = QtGui.QPen(option.palette.color(QtGui.QPalette.HighlightedText))
+        self.__previousProgress = 0
 
-        # https://stackoverflow.com/questions/4413570/use-window-viewport-to-flip-qpainter-y-axis
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.translate(0, height)
-        painter.scale(1, -1)
+    def setMinProgressStep(self, value: int):
+        self._minProgressStep = int(value)
 
-        bgRect = QtCore.QRect(0, 0, width, height)
-        painter.fillRect(bgRect, background)
-        painter.setPen(self.barColor)
-        timelineRect = QtCore.QRectF(
-            margin, margin,
-            width - 2*margin, height - 2*margin
-        )
-        painter.drawRect(timelineRect)
-        painter.setBrush(foreground)
-        painter.setPen(QtCore.Qt.NoPen)
+    def minProgressStep(self) -> int:
+        return self._minProgressStep
 
-        i = 0
-        for x, y in points:
-            pointRect = QtCore.QRect(
-                margin + i*(margin + barWidth),
-                # ((x - start) / timedelta(days=1)) * scaleX,
-                margin,
-                20,
-                y * scaleY,
-            )
-            i += 1
-            painter.fillRect(pointRect, self.barColor)
+    def show(self):
+        self.progressBar.show()
+        super().show()
 
+    def showActionProgress(self, msg: str, maxValue: int = 100):
+        if self.hidingTimer.isActive():
+            self.hidingTimer.stop()
+        self.msgLbl.setText(msg)
+        self.progressBar.setRange(0, maxValue)
+        self.__previousProgress = 0
+        self.show()
 
-if __name__ == '__main__':
+    def hideActionProgress(self, msg: str):
+        self.msgLbl.setText(msg + "  ")
+        self.progressBar.hide()
+        self.progressBar.reset()
+        self.__previousProgress = 0
+        self.hidingTimer.start(5000)    # hide widget after 5s
 
-    import sys
-
-    app = QtWidgets.QApplication(sys.argv)
-    tl = Counter(
-        {
-            date(2021, 2, 14): 5,
-            date(2021, 3, 20): 90,
-            date(2021, 4, 16): 16,
-        }
-    )
-    timeline = TimelineView(tl)
-    timeline.show()
-    sys.exit(app.exec_())
+    def setActionProgressValue(self, value: int):
+        minvalue = self.progressBar.minimum()
+        maxvalue = self.progressBar.maximum()
+        if minvalue == maxvalue:
+            return
+        progress = int(((value - minvalue) / (maxvalue - minvalue)) * 100)
+        if progress - self.__previousProgress >= self._minProgressStep:
+            self.__previousProgress = progress
+            self.progressBar.setValue(value)
+            self.progressValueChanged.emit(progress)

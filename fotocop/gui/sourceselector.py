@@ -38,12 +38,14 @@ class SourceSelector(QtWidgets.QWidget):
         self.sourceLbl.setFixedWidth(350)
         self.sourceLbl.setText("Select a source")
         self.sourceLbl.setToolTip("")
+        self.sourceLbl.setStatusTip("")
 
         deviceLbl = QtWidgets.QLabel("DEVICES")
         deviceLbl.setMaximumHeight(24)
         refreshDevBtn = QtWidgets.QPushButton(refreshIcon, "")
         refreshDevBtn.setIconSize(iconSize)
         refreshDevBtn.setToolTip(refreshTip)
+        refreshDevBtn.setStatusTip(refreshTip)
         refreshDevBtn.setFlat(True)
         self.ejectChk = QtWidgets.QCheckBox("Eject after copy")
         self.ejectChk.setChecked(False)
@@ -60,6 +62,7 @@ class SourceSelector(QtWidgets.QWidget):
         refreshFileBtn = QtWidgets.QPushButton(refreshIcon, "")
         refreshFileBtn.setIconSize(iconSize)
         refreshFileBtn.setToolTip(refreshTip)
+        refreshFileBtn.setStatusTip(refreshTip)
         refreshFileBtn.setFlat(True)
         self.subDirsChk = QtWidgets.QCheckBox("Include sub folders")
         self.subDirsChk.setChecked(False)
@@ -112,20 +115,16 @@ class SourceSelector(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
-        refreshDevBtn.clicked.connect(self.refreshSources)
-        refreshFileBtn.clicked.connect(self.refreshSources)
+        refreshDevBtn.clicked.connect(self.sourceManager.enumerateSources)
+        refreshFileBtn.clicked.connect(self.sourceManager.enumerateSources)
         self.devicesLst.selectionModel().selectionChanged.connect(
             self.onDeviceSelection
         )
 
-        QtCore.QTimer.singleShot(50, self.refreshSources)
-
     @QtCore.pyqtSlot()
-    def refreshSources(self):
+    def onSourcesEnumerated(self):
         resources = Config.fotocopSettings.resources
         manager = self.sourceManager
-
-        manager.enumerateSources()
 
         noDevice = True
         self.devicesLst.clear()
@@ -134,6 +133,7 @@ class SourceSelector(QtWidgets.QWidget):
             icon = QtGui.QIcon(f"{resources}/device.png")
             item = QtWidgets.QListWidgetItem(icon, device.caption)
             item.setToolTip(device.name)
+            item.setStatusTip(device.name)
             item.setData(QtCore.Qt.UserRole, device)
             self.devicesLst.addItem(item)
             if row == 0:
@@ -243,7 +243,9 @@ class SourceSelector(QtWidgets.QWidget):
                 )
             )
             self._setElidedText(self.sourceLbl, f"FROM {caption}\nAll pictures")
-            self.sourceLbl.setToolTip(f"Device: {caption}")
+            toolTip = f"Device: {caption}"
+            self.sourceLbl.setToolTip(toolTip)
+            self.sourceLbl.setStatusTip(toolTip)
 
         elif kind == SourceType.DRIVE:
             driveKind = source.kind
@@ -265,10 +267,9 @@ class SourceSelector(QtWidgets.QWidget):
             sourcePath = path[3:].replace("/", " / ")
             subDirs = source.subDirs
             self._setElidedText(self.sourceLbl, f"FROM {caption}\n{sourcePath}{' +' if subDirs else ''}")
-            self.sourceLbl.setToolTip(
-                f"Drive: {caption}\nPath: {path}"
-                f"{' (including subfolders)' if subDirs else ''}"
-            )
+            toolTip = f"Drive: {caption}\nPath: {path}{' (including subfolders)' if subDirs else ''}"
+            self.sourceLbl.setToolTip(toolTip)
+            self.sourceLbl.setStatusTip(toolTip)
 
         else:
             self.sourcePix.setPixmap(
@@ -278,6 +279,7 @@ class SourceSelector(QtWidgets.QWidget):
             )
             self.sourceLbl.setText("Select a source")
             self.sourceLbl.setToolTip("")
+            self.sourceLbl.setStatusTip("")
 
     @staticmethod
     def _setElidedText(label: QtWidgets.QLabel, text: str):

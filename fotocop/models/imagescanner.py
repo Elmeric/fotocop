@@ -33,28 +33,32 @@ class ScanHandler(StoppableThread):
         batchesCount = 0
         imagesBatch = list()
         stopped = False
-        for f in walker:
-            if self.stopped():
-                logger.info(f"Stop scanning images for {self.path}")
-                stopped = True
-                imagesBatch = list()
-                break
-            if self._isImage(f):
-                imagesBatch.append((f.name, f.as_posix()))
-                imagesCount += 1
-                logger.debug(f"Found image: {imagesCount} - {f.name}")
-                if imagesCount % ImageScanner.BATCH_SIZE == 0:
-                    batchesCount += 1
-                    logger.debug(f"Sending images: batch#{batchesCount}")
-                    self._publishImagesBatch(batchesCount, imagesBatch)
+        try:
+            for f in walker:
+                if self.stopped():
+                    logger.info(f"Stop scanning images for {self.path}")
+                    stopped = True
                     imagesBatch = list()
-        if imagesBatch:
-            batchesCount += 1
-            logger.debug(f"Sending remaining images: batch#{batchesCount}")
-            self._publishImagesBatch(batchesCount, imagesBatch)
-        if not stopped:
-            logger.info(f"{imagesCount} images found and sent in {batchesCount} batches")
-        self._publishScanComplete(imagesCount, stopped)
+                    break
+                if self._isImage(f):
+                    imagesBatch.append((f.name, f.as_posix()))
+                    imagesCount += 1
+                    logger.debug(f"Found image: {imagesCount} - {f.name}")
+                    if imagesCount % ImageScanner.BATCH_SIZE == 0:
+                        batchesCount += 1
+                        logger.debug(f"Sending images: batch#{batchesCount}")
+                        self._publishImagesBatch(batchesCount, imagesBatch)
+                        imagesBatch = list()
+        except OSError as e:
+            logger.error(f"Cannot scan images in {self.path}: {e}")
+        finally:
+            if imagesBatch:
+                batchesCount += 1
+                logger.debug(f"Sending remaining images: batch#{batchesCount}")
+                self._publishImagesBatch(batchesCount, imagesBatch)
+            if not stopped:
+                logger.info(f"{imagesCount} images found and sent in {batchesCount} batches")
+            self._publishScanComplete(imagesCount, stopped)
 
     @staticmethod
     def _isImage(path: Path) -> bool:

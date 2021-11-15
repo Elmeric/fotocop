@@ -44,7 +44,7 @@ class FotocopSettings(settings.Settings):
     modelChanged = signal.Signal(name='SettingsChanged')
 
     defaultDirectory = settings.Setting(defaultValue='F:/Users/Images/Mes Photos/Négatifs')
-    lastProject = settings.Setting(defaultValue=None)
+    lastSource = settings.Setting(defaultValue=None)
     logLevel = settings.Setting(defaultValue=DEFAULT_LOGLEVEL)
     windowPosition = settings.Setting(defaultValue=(200, 250))
     windowSize = settings.Setting(defaultValue=(640, 480))
@@ -64,7 +64,7 @@ class FotocopSettings(settings.Settings):
         Returns:
             A string with the project path and all its spec items.
         """
-        return f'FotocopSettings({self.defaultDirectory}, {self.lastProject},' \
+        return f'FotocopSettings({self.defaultDirectory}, {self.lastSource},' \
                f'{self.logLevel}, {self.windowPosition},' \
                f'{self.windowSize}, {self.qtScaleFactor})'
 

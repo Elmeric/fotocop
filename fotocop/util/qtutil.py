@@ -1714,6 +1714,7 @@ class SplashScreen(QtWidgets.QSplashScreen):
         super().__init__(pixmap, flags)
         self._version = version
         self._progress = 0
+        self._message = None
         try:
             self._imageWidth = pixmap.width() / pixmap.devicePixelRatioF()
         except AttributeError:
@@ -1731,15 +1732,20 @@ class SplashScreen(QtWidgets.QSplashScreen):
             painter.setPen(self._progressBarPen)
             x = int(self._progress / 100 * self._imageWidth)
             painter.drawLine(0, 360, x, 360)
+        if self._message:
+            painter.setPen(QtGui.QColor(QtCore.Qt.black))
+            painter.drawText(12, 385, self._message)
         painter.restore()
 
-    def setProgress(self, value: int) -> None:
+    def setProgress(self, value: int, msg: str = None) -> None:
         """Update the splash screen progress bar
 
         Args:
              value: percent done, between 0 and 100
+             msg: optional message to display
         """
         self._progress = value
+        self._message = msg
         # time.sleep(0.2)
         self.repaint()
 

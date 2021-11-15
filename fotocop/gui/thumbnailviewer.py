@@ -379,7 +379,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.filterBtn.setChecked(False)
 
     @QtCore.pyqtSlot(Selection)
-    def onSourceSelected(self, _selection):
+    def clearImages(self, _selection):
         self.thumbnailView.model().sourceModel().clearImages()
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)

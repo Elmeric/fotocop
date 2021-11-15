@@ -3,6 +3,7 @@
 import sys
 import os
 import logging
+import time
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -68,10 +69,10 @@ class QtMainView(QtWidgets.QMainWindow):
         status (QStatusBar): reference to the Main window status bar.
     """
 
-    def __init__(self, splash, logConfig, *args, **kwargs):
+    def __init__(self, sourceManager, splash, logConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        splash.setProgress(10)
+        splash.setProgress(10, "Create Gui objects...")
 
         self.splash = splash
 
@@ -79,7 +80,8 @@ class QtMainView(QtWidgets.QMainWindow):
         selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
         # Initialize the app's views. Init order to comply with the editors' dependencies.
-        self.sourceManager = SourceManager()
+        self.sourceManager = sourceManager
+        # self.sourceManager = SourceManager()
         self.sourceSelector = SourceSelector(self.sourceManager)
         self.destSelector = QtUtil.DirectorySelector(
             label="Destination folder:",
@@ -97,12 +99,10 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self.timelineViewer = TimelineViewer()
 
-        self.sourceManager.sourceEnumerated.connect(self.sourceSelector.onSourcesEnumerated)
-        self.sourceManager.sourceSelected.connect(self.sourceSelector.onSourceSelected)
-        self.sourceManager.sourceSelected.connect(self.thumbnailViewer.onSourceSelected)
-        self.sourceManager.sourceSelected.connect(self.timelineViewer.onSourceSelected)
+        self.sourceManager.sourceSelected.connect(self.sourceSelector.displaySelectedSource)
+        self.sourceManager.sourceSelected.connect(self.thumbnailViewer.clearImages)
+        self.sourceManager.sourceSelected.connect(self.timelineViewer.setTimeline)
         self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
-        # self.sourceManager.imageScanCompleted.connect(self.timelineViewer.buildTimeline)
         self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
         self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
         self.sourceManager.timelineBuilt.connect(self.timelineViewer.finalizeTimeline)
@@ -235,7 +235,8 @@ class QtMainView(QtWidgets.QMainWindow):
         self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
         self.status.messageChanged.connect(self.onStatusChanged)
 
-        splash.setProgress(50)
+        splash.setProgress(50, "Enumerating images sources...")
+        self.sourceManager.enumerateSources()
 
         QtCore.QTimer.singleShot(0, self.initUI)
 
@@ -244,16 +245,12 @@ class QtMainView(QtWidgets.QMainWindow):
 
         Called on an immediate timer once the main windows is built.
         """
-        self.splash.setProgress(70)
+        self.splash.setProgress(70, "Load user settings")
 
         settings = Config.fotocopSettings
 
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
-
-        self.splash.setProgress(80)
-
-        QtCore.QTimer.singleShot(1000, self.sourceManager.enumerateSources)
 
         self.splash.setProgress(100)
 
@@ -397,9 +394,23 @@ class QtMainView(QtWidgets.QMainWindow):
                 self.geometry().height(),
             )
 
-            # if self.project:
-            #     projectPath = self.project.path
-            #     Config.fotocopSettings.lastProject = projectPath.as_posix() if projectPath.name else ''
+            # selection = self.sourceManager.selection
+            # source = selection.source
+            # if source:
+            #     kind = selection.kind
+            #     if kind == SourceType.DRIVE:
+            #         name = source.id
+            #         path = source.selectedPath
+            #         subDirs = source.subDirs
+            #     elif kind == SourceType.DEVICE:
+            #         name = source.name
+            #         path = subDirs = None
+            #     else:
+            #         name = path = subDirs = None
+            # else:
+            #     kind = SourceType.UNKNOWN
+            #     name = path = subDirs = None
+            # Config.fotocopSettings.lastSource = (name, kind.name, path, subDirs)
 
             try:
                 Config.fotocopSettings.save()
@@ -461,6 +472,8 @@ def QtMain():
     f.setPointSize(fSize + 2)
     app.setFont(f)
 
+    sourceManager = SourceManager()
+
     # Build and show the splash screen.
     # Use QIcon to render so we get the high DPI version automatically
     size = QtCore.QSize(600, 400)
@@ -469,7 +482,7 @@ def QtMain():
     splash.show()
 
     # Build and show the main view after the splash screen delay.
-    mainView = QtMainView(splash, logConfig)
+    mainView = QtMainView(sourceManager, splash, logConfig)
     splash.finish(mainView)
     mainView.show()
 

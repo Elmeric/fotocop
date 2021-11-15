@@ -1,10 +1,9 @@
 import logging
 
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List
 from functools import total_ordering
 
 from fotocop.util import nodemixin as nd
-from fotocop.util import qtutil as QtUtil
 
 logger = logging.getLogger(__name__)
 

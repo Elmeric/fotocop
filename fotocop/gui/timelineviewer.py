@@ -55,7 +55,7 @@ class TimelineViewer(QtWidgets.QWidget):
         self._view.zoomed.connect(self.onZoomLevelChanged)
 
     @QtCore.pyqtSlot(Selection)
-    def onSourceSelected(self, selection: Selection):
+    def setTimeline(self, selection: Selection):
         timeline = None if selection.source is None else selection.timeline
         self._timeline = timeline
         self.setScene(clearBefore=True)

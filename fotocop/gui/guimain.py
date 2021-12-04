@@ -23,7 +23,6 @@ from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
 from .timelineviewer import TimelineViewer
 
-
 __all__ = ["QtMain"]
 
 logger = logging.getLogger(__name__)
@@ -97,7 +96,7 @@ class QtMainView(QtWidgets.QMainWindow):
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         self.thumbnailViewer = ThumbnailViewer()
 
-        self.timelineViewer = TimelineViewer()
+        self.timelineViewer = TimelineViewer(parent=self)
 
         self.sourceManager.sourceSelected.connect(self.sourceSelector.displaySelectedSource)
         self.sourceManager.sourceSelected.connect(self.thumbnailViewer.clearImages)
@@ -108,6 +107,7 @@ class QtMainView(QtWidgets.QMainWindow):
         self.sourceManager.timelineBuilt.connect(self.timelineViewer.finalizeTimeline)
         self.thumbnailViewer.zoomLevelChanged.connect(self.timelineViewer.zoom)
         self.timelineViewer.zoomed.connect(self.thumbnailViewer.onZoomLevelChanged)
+        self.timelineViewer.hoveredNodeChanged.connect(self.thumbnailViewer.showNodeInfo)
 
         splash.setProgress(30)
 

@@ -1,4 +1,5 @@
 import logging
+from enum import IntEnum
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Tuple
 
@@ -8,7 +9,7 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.models import settings as Config
 from fotocop.models.sources import Selection
-from .timelineviewer import ZoomLevel, TimelineViewer
+from .timelineviewer import tlv
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Image
@@ -30,11 +31,12 @@ THUMB_MARGIN = (CELL_IN_WIDTH - THUMB_HEIGHT) / 2
 
 
 class ImageModel(QtCore.QAbstractListModel):
-    def __init__(
-        self,
-        images: List["Image"] = None,
-        parent=None,
-    ):
+
+    class UserRoles(IntEnum):
+        ThumbnailRole = QtCore.Qt.UserRole + 1
+        DateTimeRole = QtCore.Qt.UserRole + 2
+
+    def __init__(self, images: List["Image"] = None, parent=None):
         super().__init__(parent)
 
         self.images = images or list()
@@ -59,17 +61,24 @@ class ImageModel(QtCore.QAbstractListModel):
         if role == QtCore.Qt.DisplayRole:
             return images[row].name
 
-        if role == QtCore.Qt.UserRole:
-            # logger.debug(f"Access to UserRole for {images[row].name}")
+        if role == ImageModel.UserRoles.ThumbnailRole:
+        # if role == QtCore.Qt.UserRole:
             return images[row].getThumbnail()
 
-        # if role == QtCore.Qt.ToolTipRole:
-        #     dateTime = images[row].datetime
-        #     if dateTime:
-        #         year, month, day, hour, minute, second = dateTime
-        #         return f"{year}{month}{day}-{hour}{minute}{second}"
-        #     else:
-        #         return None
+        if role == ImageModel.UserRoles.DateTimeRole:
+            datetime_ = images[row].datetime
+            if datetime_:
+                return tuple([int(e) for e in datetime_])
+            else:
+                return None
+
+        if role == QtCore.Qt.ToolTipRole:
+            datetime_ = images[row].datetime
+            if datetime_:
+                year, month, day, hour, minute, second = datetime_
+                return f"{year}{month}{day}-{hour}{minute}{second}"
+            else:
+                return None
 
         if role == QtCore.Qt.CheckStateRole:
             if images[row].isSelected:
@@ -88,9 +97,7 @@ class ImageModel(QtCore.QAbstractListModel):
         row = index.row()
         if role == QtCore.Qt.CheckStateRole:
             image = self.images[row]
-            isSelected = True if value == QtCore.Qt.Checked else False
-            image.isSelected = isSelected
-            # print(f"    > {image.name} check state is {isSelected}")
+            image.isSelected = True if value == QtCore.Qt.Checked else False
             self.dataChanged.emit(index, index, (role,))
             return True
 
@@ -102,7 +109,8 @@ class ImageModel(QtCore.QAbstractListModel):
         self.endResetModel()
 
     def addImages(self, images: List["Image"]):
-        self.beginInsertRows(QtCore.QModelIndex(), self.rowCount(), self.rowCount() + len(images) - 1)
+        row = self.rowCount()
+        self.beginInsertRows(QtCore.QModelIndex(), row, row + len(images) - 1)
         self.images.extend(images)
         self.endInsertRows()
 
@@ -115,7 +123,8 @@ class ImageModel(QtCore.QAbstractListModel):
                 break
         if found:
             index = self.index(row, 0)
-            self.dataChanged.emit(index, index, (QtCore.Qt.UserRole, QtCore.Qt.ToolTipRole))
+            self.dataChanged.emit(index, index, (ImageModel.UserRoles.ThumbnailRole, ImageModel.UserRoles.DateTimeRole))
+            # self.dataChanged.emit(index, index, (QtCore.Qt.UserRole, QtCore.Qt.ToolTipRole))
 
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
@@ -126,7 +135,8 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         imageName = index.data(QtCore.Qt.DisplayRole)
-        imageThumb, aspectRatio, orientation = index.data(QtCore.Qt.UserRole)
+        imageThumb, aspectRatio, orientation = index.data(ImageModel.UserRoles.ThumbnailRole)
+        # imageThumb, aspectRatio, orientation = index.data(QtCore.Qt.UserRole)
 
         if imageThumb == "loading":
             px = self.dummyImage
@@ -288,12 +298,10 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
 class ThumbnailViewer(QtWidgets.QWidget):
 
-    zoomLevelChanged = QtCore.pyqtSignal(ZoomLevel)
+    zoomLevelChanged = QtCore.pyqtSignal(tlv.ZoomLevel)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
-        # self.selectedImagesSource = None
 
         resources = Config.fotocopSettings.resources
 
@@ -311,16 +319,12 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.thumbnailView.setLayoutMode(QtWidgets.QListView.SinglePass)
         self.thumbnailView.setGridSize(QtCore.QSize(CELL_WIDTH, CELL_HEIGHT))
         self.thumbnailView.setUniformItemSizes(True)
-        self.thumbnailView.setMinimumWidth(4 * CELL_WIDTH + 24)
+        self.thumbnailView.setMinimumWidth(4*CELL_WIDTH + 24)
         self.thumbnailView.setSelectionMode(
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
 
-        # self.thumbnailView.setModel(ImageModel())
-
         self.thumbnailView.setItemDelegate(ThumbnailDelegate())
-
-        # self.setSortingEnabled(True)
 
         proxyModel = ThumbnailFilterProxyModel()
         self._imageModel = ImageModel()
@@ -333,6 +337,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.noneBtn = QtWidgets.QPushButton("None")
         self.noneBtn.setToolTip("Deselect all images")
         self.noneBtn.setStatusTip("Deselect all images")
+
         self.filterBtn = QtWidgets.QToolButton()
         self.filterBtn.setIconSize(iconSize)
         self.filterBtn.setIcon(filterIcon)
@@ -345,9 +350,11 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.toDateSelector.setCalendarPopup(True)
 
         self.zoomLevelSelector = QtWidgets.QComboBox()
-        for z in ZoomLevel:
+        for z in tlv.ZoomLevel:
             self.zoomLevelSelector.addItem(z.name, z)
-        self.zoomLevelSelector.setCurrentText(TimelineViewer.DEFAULT_ZOOM_LEVEL.name)
+        self.zoomLevelSelector.setCurrentText(tlv.DEFAULT_ZOOM_LEVEL.name)
+
+        self.hoveredNodeLbl = QtWidgets.QLabel("")
 
         hlayout = QtWidgets.QHBoxLayout()
         hlayout.addWidget(self.allBtn)
@@ -356,6 +363,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         hlayout.addWidget(self.fromDateSelector)
         hlayout.addWidget(self.toDateSelector)
         hlayout.addWidget(self.zoomLevelSelector)
+        hlayout.addWidget(self.hoveredNodeLbl)
         hlayout.addStretch()
 
         layout = QtWidgets.QVBoxLayout()
@@ -363,8 +371,12 @@ class ThumbnailViewer(QtWidgets.QWidget):
         layout.addLayout(hlayout)
         self.setLayout(layout)
 
-        self.allBtn.clicked.connect(self.selectAll)
-        self.noneBtn.clicked.connect(self.deselectAll)
+        self.allBtn.clicked.connect(
+            lambda: self.setSelected(QtCore.Qt.Checked)
+        )
+        self.noneBtn.clicked.connect(
+            lambda: self.setSelected(QtCore.Qt.Unchecked)
+        )
         self.fromDateSelector.dateChanged.connect(self.setFromDate)
         self.toDateSelector.dateChanged.connect(self.setToDate)
         self.filterBtn.toggled.connect(self.toggleFilter)
@@ -395,19 +407,11 @@ class ThumbnailViewer(QtWidgets.QWidget):
     def updateImage(self, imageKey: str):
         self.thumbnailView.model().sourceModel().updateImage(imageKey)
 
-    @QtCore.pyqtSlot()
-    def selectAll(self):
+    def setSelected(self, state: QtCore.Qt.CheckState):
         model = self.thumbnailView.model().sourceModel()
         for i in range(model.rowCount()):
             index = model.index(i, 0, QtCore.QModelIndex())
-            model.setData(index, QtCore.Qt.Checked, QtCore.Qt.CheckStateRole)
-
-    @QtCore.pyqtSlot()
-    def deselectAll(self):
-        model = self.thumbnailView.model().sourceModel()
-        for i in range(model.rowCount()):
-            index = model.index(i, 0, QtCore.QModelIndex())
-            model.setData(index, QtCore.Qt.Unchecked, QtCore.Qt.CheckStateRole)
+            model.setData(index, state, QtCore.Qt.CheckStateRole)
 
     @QtCore.pyqtSlot(QtCore.QDate)
     def setFromDate(self, date: QtCore.QDate):
@@ -426,9 +430,16 @@ class ThumbnailViewer(QtWidgets.QWidget):
     def toggleFilter(self, checked: bool):
         self.thumbnailView.model().setIsDateFilterOn(checked)
 
-    @QtCore.pyqtSlot(ZoomLevel)
-    def onZoomLevelChanged(self, zoomLevel: ZoomLevel):
+    @QtCore.pyqtSlot(tlv.ZoomLevel)
+    def onZoomLevelChanged(self, zoomLevel: tlv.ZoomLevel):
         self.zoomLevelSelector.setCurrentText(zoomLevel.name)
+
+    @QtCore.pyqtSlot(str, int)
+    def showNodeInfo(self, nodeKey: str, nodeWeight: int):
+        if nodeKey:
+            self.hoveredNodeLbl.setText(f"{nodeKey}: {nodeWeight} images")
+        else:
+            self.hoveredNodeLbl.clear()
 
 
 class ThumbnailView(QtWidgets.QListView):
@@ -456,6 +467,8 @@ class ThumbnailView(QtWidgets.QListView):
             # print("Selection preserved")
             current = self.currentIndex()
             if not(len(selected.indexes()) == 1 and selected.indexes()[0] == current):
+                # Other items than the current one are selected: add the selection to
+                # the deselected items and make the deselected items the new selection.
                 deselected.merge(self.selectionModel().selection(), QtCore.QItemSelectionModel.Select)
                 self.selectionModel().select(deselected, QtCore.QItemSelectionModel.Select)
 
@@ -537,8 +550,8 @@ class ThumbnailView(QtWidgets.QListView):
 
 class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
 
-    _dateFilter = tuple()
-    _isDateFilterOn = False
+    _dateFilter: Tuple[str, str] = tuple()
+    _isDateFilterOn: bool = False
 
     @classmethod
     def dateFilter(cls) -> Tuple[str, str]:
@@ -561,9 +574,9 @@ class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
 
         if self.isDateFilterOn():
             index = self.sourceModel().index(sourceRow, 0, sourceParent)
-            dateTime = self.sourceModel().data(index, QtCore.Qt.ToolTipRole)
+            dateTime = self.sourceModel().data(index, ImageModel.UserRoles.DateTimeRole)
             if dateTime:
-                dateTime = datetime.strptime(dateTime, "%Y%m%d-%H%M%S")
+                dateTime = datetime(*dateTime)
                 start, end = self.dateFilter()
                 start = datetime.strptime(start, "%Y%m%d")
                 end = datetime.strptime(end, "%Y%m%d")

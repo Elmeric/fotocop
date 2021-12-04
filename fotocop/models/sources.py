@@ -404,8 +404,8 @@ class SourceManager(metaclass=Singleton):
 
         self.sourceEnumerated.emit()
 
-    def getSources(self, enumerateFisrt: bool = False) -> Tuple[List[Device], List[LogicalDisk]]:
-        if enumerateFisrt or not self.logicalDisks:
+    def getSources(self, enumerateFirst: bool = False) -> Tuple[List[Device], List[LogicalDisk]]:
+        if enumerateFirst or not self.logicalDisks:
             # Enumeration required or sources not yet enumerated: do it! (do not test on
             # self.devices as it may be empty after sources enumeration if no devices
             # are connected).

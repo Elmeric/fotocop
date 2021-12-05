@@ -190,6 +190,19 @@ def scaledIcon(path: str, size: Optional[QtCore.QSize] = None) -> QtGui.QIcon:
     return i
 
 
+def reconnect(signal, newSlot=None, oldSlot=None):
+    try:
+        if oldSlot is not None:
+            while True:
+                signal.disconnect(oldSlot)
+        else:
+            signal.disconnect()
+    except TypeError:
+        pass
+    if newSlot is not None:
+        signal.connect(newSlot)
+
+
 class MyAppStyle(QtWidgets.QProxyStyle):
     """A QProxyStyle specialization to adjust some default style settings.
 

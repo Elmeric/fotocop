@@ -46,9 +46,10 @@ class TimelineScene(QtWidgets.QGraphicsScene):
 
     @QtCore.pyqtSlot()
     def clearSelection(self):
-        super().clearSelection()
+        # super().clearSelection()
         if self.timeline is not None:
             self.timeline.selectionModel().clearSelection()
+        print(f"Selected time ranges: {self.timeline.selectionModel().selectedRanges()}")
 
     def clear(self):
         self._nodes = dict()
@@ -330,7 +331,7 @@ class NodeGeometry:
         super().__init__()
         self.width = 100
         self.height = MAX_BAR_HEIGHT
-        self.barWidth = 150
+        self.barWidth = 15
         self.spacing = 5
         self.hovered = False
 

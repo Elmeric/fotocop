@@ -1,6 +1,8 @@
 import logging
 from enum import IntEnum
 from copy import copy, deepcopy
+from datetime import datetime
+from calendar import monthrange
 
 from typing import Optional, Tuple, List
 from functools import total_ordering
@@ -50,9 +52,25 @@ class SelectionFlag(IntEnum):
     Toggle = 8
 
 
+class TimeRange:
+    def __init__(self, start=None, end=None):
+        self.start = start or datetime.min
+        self.end = end or datetime.today()
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, TimeRange):
+            return NotImplemented
+
+        return other.start == self.start and other.end == self.end
+
+    def __repr__(self) -> str:
+        return f"<TimeRange({self.start}, {self.end})>"
+
+
 class TimelineNodeSelection():
 
-    selectionChanged = QtUtil.QtSignalAdapter(set, set, set)   # selected, partially selected, deselected
+    selectionChanged = QtUtil.QtSignalAdapter(set, set, set)    # selected, partially selected, deselected
+    timeRangeChanged = QtUtil.QtSignalAdapter(list)             # list of ordered TimeRange
 
     def __init__(self):
         self.selected = dict()
@@ -96,6 +114,7 @@ class TimelineNodeSelection():
         #     print(i.date, end=" ")
 
         self.selectionChanged.emit(self._newSelected, self._newPartiallySelected, self._newDeselected)
+        self.timeRangeChanged.emit(self.selectedRanges())
 
     def clearSelection(self):
         self.select(list(self.selected.values()), SelectionFlag.Clear)
@@ -117,6 +136,60 @@ class TimelineNodeSelection():
         presel.partiallySelected = copy(self.partiallySelected)
         presel._selectedChildCount = copy(self._selectedChildCount)
         return presel
+
+    def selectedRanges(self) -> List[TimeRange]:
+        selectedRanges = list()
+        for item in self.selected.values():
+            selectedRanges = self._mergeToRanges(item.timeRange, selectedRanges)
+        return selectedRanges
+
+    def _mergeToRanges(self, timeRange: TimeRange, timeRanges: List[TimeRange]) -> List[TimeRange]:
+        if timeRanges:
+            head = timeRanges[0]
+            tail = timeRanges[1:]
+            mergedRanges = self._mergeRanges(timeRange, head)
+
+            if len(mergedRanges) == 1:
+                # timeRange and head overlapped: merge result with tail.
+                return self._mergeToRanges(mergedRanges[0], tail)
+
+            # timeRange and head disjointed.
+            if mergedRanges[0] == timeRange:
+                # timeRange is before head: merge is completed.
+                mergedRanges.extend(tail)
+                return mergedRanges
+
+            # timeRange is after head: continue merging with tail.
+            head = [head]
+            merged = self._mergeToRanges(timeRange, tail)
+            head.extend(merged)
+            return head
+
+        return [timeRange]
+
+    @staticmethod
+    def _mergeRanges(r1: TimeRange, r2: TimeRange) -> List[TimeRange]:
+        if r1.end < r2.start:
+            # r1 before r2.
+            return [r1, r2]
+        if r1.start > r2.end:
+            # r1 after r2.
+            return [r2, r1]
+        # r1 and r2 overlapped
+        if r1.start < r2.start:
+            # r1 starts before r2
+            if r1.end < r2.end:
+                # s1, s2, e1, e2: return s1, e2
+                return [TimeRange(r1.start, r2.end)]
+            # s1, s2, e2, e1: return s1, e1
+            return [TimeRange(r1.start, r1.end)]
+        # r1 starts after r2
+        if r1.end < r2.end:
+            # s2, s1, e1, e2: return
+            return [TimeRange(r2.start, r2.end)]
+        # s2, s1, e2, e1: return s2, e1
+        return [TimeRange(r2.start, r1.end)]
+
 
     def _internalSelect(self, item: "TimelineNode", command: SelectionFlag):
         if command == SelectionFlag.Clear:
@@ -327,6 +400,55 @@ class TimelineNode(nd.NodeMixin):
         if self.is_root:
             return "/"
         return f"{self.parent.date}/{self._id}"
+
+    @property
+    def timeRange(self):
+        depth = self.depth
+        if depth == 0:  # root
+            return TimeRange()
+        if depth == 1:  # year
+            return TimeRange(
+                start=datetime(int(self.key), 1, 1),
+                end=datetime(int(self.key), 12, 31, 23, 59, 59)
+            )
+        if depth == 2:  # month
+            year = int(self.parent.key)
+            month = int(self.key)
+            lastDay = monthrange(year, month)[1]
+            return TimeRange(
+                start=datetime(year, month, 1),
+                end=datetime(year, month, lastDay, 23, 59, 59)
+            )
+        if depth == 3:  # day
+            return TimeRange(
+                start=datetime(
+                    int(self.parent.parent.key),
+                    int(self.parent.key),
+                    int(self.key)
+                ),
+                end=datetime(
+                    int(self.parent.parent.key),
+                    int(self.parent.key), int(self.key),
+                    23, 59, 59
+                )
+            )
+        if depth == 4:  # hour
+            return TimeRange(
+                start=datetime(
+                    int(self.parent.parent.parent.key),
+                    int(self.parent.parent.key),
+                    int(self.parent.key),
+                    int(self.key)
+                ),
+                end=datetime(
+                    int(self.parent.parent.parent.key),
+                    int(self.parent.parent.key),
+                    int(self.parent.key),
+                    int(self.key),
+                    59, 59
+                )
+            )
+        return TimeRange()
 
     def __eq__(self, other: "TimelineNode") -> bool:
         if not isinstance(other, TimelineNode):

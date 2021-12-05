@@ -50,6 +50,7 @@ class TimelineViewer(QtWidgets.QWidget):
 
     zoomed = QtCore.pyqtSignal(tlv.ZoomLevel)
     hoveredNodeChanged = QtCore.pyqtSignal(str, int)    # key, weight
+    timeRangeChanged = QtCore.pyqtSignal(list)          # list of ordered TimeRange
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,6 +103,9 @@ class TimelineViewer(QtWidgets.QWidget):
             self._scenes[zoomLevel].setTimeline(sourceSelection.timeline)
         self._clearScenes()
         self._setScene(self.zoomLevel())
+        sourceSelection.timeline.selectionModel().timeRangeChanged.connect(
+            self.timeRangeChanged
+        )
 
     @QtCore.pyqtSlot()
     def updateTimeline(self):

@@ -4,6 +4,7 @@ import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
+from fotocop.util import qtutil as QtUtil
 from fotocop.models.timeline import SelectionFlag, SelectionState
 from .tlv import ZoomLevel, DEFAULT_ZOOM_LEVEL, MAX_BAR_HEIGHT
 
@@ -55,7 +56,9 @@ class TimelineView(QtWidgets.QGraphicsView):
     def setScene(self, scene: QtWidgets.QGraphicsScene):
         super().setScene(scene)
         if scene:
-            self.clearSelectionAction.triggered.connect(scene.clearSelection)
+            # Disconnect clearSelectionAction from previous scene if any and reconnect
+            # to the new scene.
+            QtUtil.reconnect(self.clearSelectionAction.triggered, scene.clearSelection)
 
     def resizeEvent(self, event: QtGui.QResizeEvent):
         self.fitInView(
@@ -202,6 +205,8 @@ class TimelineView(QtWidgets.QGraphicsView):
                 # Exit selection mode
                 self._firstSelectedItem = None
                 self._selectionInProgress = False
+
+                print(f"Selected time ranges: {scene.timeline.selectionModel().selectedRanges()}")
         else:
             super().mouseReleaseEvent(event)
 

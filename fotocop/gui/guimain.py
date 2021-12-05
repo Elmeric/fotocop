@@ -105,9 +105,11 @@ class QtMainView(QtWidgets.QMainWindow):
         self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
         self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
         self.sourceManager.timelineBuilt.connect(self.timelineViewer.finalizeTimeline)
+        self.sourceManager.timelineBuilt.connect(self.thumbnailViewer.updateSelStatus)
         self.thumbnailViewer.zoomLevelChanged.connect(self.timelineViewer.zoom)
         self.timelineViewer.zoomed.connect(self.thumbnailViewer.onZoomLevelChanged)
         self.timelineViewer.hoveredNodeChanged.connect(self.thumbnailViewer.showNodeInfo)
+        self.timelineViewer.timeRangeChanged.connect(self.thumbnailViewer.updateTimeRange)
 
         splash.setProgress(30)
 

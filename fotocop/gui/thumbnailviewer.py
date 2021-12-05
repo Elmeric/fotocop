@@ -9,6 +9,7 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.models import settings as Config
 from fotocop.models.sources import Selection
+from fotocop.models.timeline import TimeRange
 from .timelineviewer import tlv
 
 if TYPE_CHECKING:
@@ -342,12 +343,13 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.filterBtn.setIconSize(iconSize)
         self.filterBtn.setIcon(filterIcon)
         self.filterBtn.setCheckable(True)
-        self.filterBtn.setToolTip('Filter images on date')
-        self.filterBtn.setStatusTip('Filter images on date')
-        self.fromDateSelector = QtWidgets.QDateEdit()
-        self.fromDateSelector.setCalendarPopup(True)
-        self.toDateSelector = QtWidgets.QDateEdit()
-        self.toDateSelector.setCalendarPopup(True)
+        self.filterBtn.setToolTip('Filter images by selecting dates in the timeline')
+        self.filterBtn.setStatusTip('Filter images by selecting dates in the timeline')
+        self.selStatusLbl = QtWidgets.QLabel("")
+        # self.fromDateSelector = QtWidgets.QDateEdit()
+        # self.fromDateSelector.setCalendarPopup(True)
+        # self.toDateSelector = QtWidgets.QDateEdit()
+        # self.toDateSelector.setCalendarPopup(True)
 
         self.zoomLevelSelector = QtWidgets.QComboBox()
         for z in tlv.ZoomLevel:
@@ -360,8 +362,9 @@ class ThumbnailViewer(QtWidgets.QWidget):
         hlayout.addWidget(self.allBtn)
         hlayout.addWidget(self.noneBtn)
         hlayout.addWidget(self.filterBtn)
-        hlayout.addWidget(self.fromDateSelector)
-        hlayout.addWidget(self.toDateSelector)
+        hlayout.addWidget(self.selStatusLbl)
+        # hlayout.addWidget(self.fromDateSelector)
+        # hlayout.addWidget(self.toDateSelector)
         hlayout.addWidget(self.zoomLevelSelector)
         hlayout.addWidget(self.hoveredNodeLbl)
         hlayout.addStretch()
@@ -377,8 +380,8 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.noneBtn.clicked.connect(
             lambda: self.setSelected(QtCore.Qt.Unchecked)
         )
-        self.fromDateSelector.dateChanged.connect(self.setFromDate)
-        self.toDateSelector.dateChanged.connect(self.setToDate)
+        # self.fromDateSelector.dateChanged.connect(self.setFromDate)
+        # self.toDateSelector.dateChanged.connect(self.setToDate)
         self.filterBtn.toggled.connect(self.toggleFilter)
         self.zoomLevelSelector.activated.connect(
             lambda: self.zoomLevelChanged.emit(self.zoomLevelSelector.currentData())
@@ -386,15 +389,18 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
-        self.fromDateSelector.setDate(QtCore.QDate.currentDate())
-        self.toDateSelector.setDate(QtCore.QDate.currentDate())
+        # self.fromDateSelector.setDate(QtCore.QDate.currentDate())
+        # self.toDateSelector.setDate(QtCore.QDate.currentDate())
         self.filterBtn.setChecked(False)
 
     @QtCore.pyqtSlot(Selection)
     def clearImages(self, _selection):
+        self.filterBtn.setChecked(False)
         self.thumbnailView.model().sourceModel().clearImages()
+        self.thumbnailView.model().setTimeRangeFilter([TimeRange()])
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
+        self.selStatusLbl.hide()
 
     @QtCore.pyqtSlot(dict)
     def addImages(self, images):
@@ -413,22 +419,23 @@ class ThumbnailViewer(QtWidgets.QWidget):
             index = model.index(i, 0, QtCore.QModelIndex())
             model.setData(index, state, QtCore.Qt.CheckStateRole)
 
-    @QtCore.pyqtSlot(QtCore.QDate)
-    def setFromDate(self, date: QtCore.QDate):
-        fromDate = date.toString("yyyyMMdd")
-        # fromDate = date.toPyDate()
-        toDate = self.toDateSelector.date().toString("yyyyMMdd")
-        self.thumbnailView.model().setDateFilter((fromDate, toDate))
+    # @QtCore.pyqtSlot(QtCore.QDate)
+    # def setFromDate(self, date: QtCore.QDate):
+    #     fromDate = date.toString("yyyyMMdd")
+    #     # fromDate = date.toPyDate()
+    #     toDate = self.toDateSelector.date().toString("yyyyMMdd")
+    #     self.thumbnailView.model().setDateFilter((fromDate, toDate))
 
-    @QtCore.pyqtSlot(QtCore.QDate)
-    def setToDate(self, date: QtCore.QDate):
-        toDate = date.toString("yyyyMMdd")
-        fromDate = self.fromDateSelector.date().toString("yyyyMMdd")
-        self.thumbnailView.model().setDateFilter((fromDate, toDate))
+    # @QtCore.pyqtSlot(QtCore.QDate)
+    # def setToDate(self, date: QtCore.QDate):
+    #     toDate = date.toString("yyyyMMdd")
+    #     fromDate = self.fromDateSelector.date().toString("yyyyMMdd")
+    #     self.thumbnailView.model().setDateFilter((fromDate, toDate))
 
     @QtCore.pyqtSlot(bool)
     def toggleFilter(self, checked: bool):
         self.thumbnailView.model().setIsDateFilterOn(checked)
+        self.updateSelStatus()
 
     @QtCore.pyqtSlot(tlv.ZoomLevel)
     def onZoomLevelChanged(self, zoomLevel: tlv.ZoomLevel):
@@ -440,6 +447,17 @@ class ThumbnailViewer(QtWidgets.QWidget):
             self.hoveredNodeLbl.setText(f"{nodeKey}: {nodeWeight} images")
         else:
             self.hoveredNodeLbl.clear()
+
+    @QtCore.pyqtSlot(list)
+    def updateTimeRange(self, timeRange: List["TimeRange"]):
+        self.thumbnailView.model().setTimeRangeFilter(timeRange)
+        self.updateSelStatus()
+
+    def updateSelStatus(self):
+        imagesCount = self.thumbnailView.model().sourceModel().rowCount()
+        imagesShown = self.thumbnailView.model().rowCount()
+        self.selStatusLbl.show()
+        self.selStatusLbl.setText(f"Show {imagesShown} images on {imagesCount}")
 
 
 class ThumbnailView(QtWidgets.QListView):
@@ -550,15 +568,26 @@ class ThumbnailView(QtWidgets.QListView):
 
 class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
 
-    _dateFilter: Tuple[str, str] = tuple()
+    # _dateFilter: Tuple[str, str] = tuple()
     _isDateFilterOn: bool = False
+    _timeRangeFilter: List["TimeRange"] = [TimeRange()]
+
+    # @classmethod
+    # def dateFilter(cls) -> Tuple[str, str]:
+    #     return cls._dateFilter
+
+    # def setDateFilter(self, value: Tuple[str, str]):
+    #     ThumbnailFilterProxyModel._dateFilter = value
+    #     self.invalidateFilter()
 
     @classmethod
-    def dateFilter(cls) -> Tuple[str, str]:
-        return cls._dateFilter
+    def timeRangeFilter(cls) -> List["TimeRange"]:
+        return cls._timeRangeFilter
 
-    def setDateFilter(self, value: Tuple[str, str]):
-        ThumbnailFilterProxyModel._dateFilter = value
+    def setTimeRangeFilter(self, value: List["TimeRange"]):
+        if not value:
+            value = [TimeRange()]
+        ThumbnailFilterProxyModel._timeRangeFilter = value
         self.invalidateFilter()
 
     @classmethod
@@ -577,9 +606,13 @@ class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
             dateTime = self.sourceModel().data(index, ImageModel.UserRoles.DateTimeRole)
             if dateTime:
                 dateTime = datetime(*dateTime)
-                start, end = self.dateFilter()
-                start = datetime.strptime(start, "%Y%m%d")
-                end = datetime.strptime(end, "%Y%m%d")
-                OkDate = start <= dateTime <= end
+                OkDate = any(
+                    [tr.start <= dateTime <= tr.end for tr in self.timeRangeFilter()]
+                )
+
+                # start, end = self.dateFilter()
+                # start = datetime.strptime(start, "%Y%m%d")
+                # end = datetime.strptime(end, "%Y%m%d")
+                # OkDate = start <= dateTime <= end
 
         return OkDate

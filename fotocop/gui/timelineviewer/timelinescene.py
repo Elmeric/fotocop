@@ -46,7 +46,6 @@ class TimelineScene(QtWidgets.QGraphicsScene):
 
     @QtCore.pyqtSlot()
     def clearSelection(self):
-        # super().clearSelection()
         if self.timeline is not None:
             self.timeline.selectionModel().clearSelection()
         print(f"Selected time ranges: {self.timeline.selectionModel().selectedRanges()}")
@@ -118,8 +117,6 @@ class YearScene(TimelineScene):
         bounding = self.itemsBoundingRect()
         self.setSceneRect(0, 0, bounding.width(), MAX_BAR_HEIGHT)
 
-        self.isLoaded = True
-
 
 class MonthScene(TimelineScene):
     def __init__(self, parent=None):
@@ -150,8 +147,6 @@ class MonthScene(TimelineScene):
         # Update the scene rect and its reference point.
         bounding = self.itemsBoundingRect()
         self.setSceneRect(0, 0, bounding.width(), MAX_BAR_HEIGHT)
-
-        self.isLoaded = True
 
 
 class DayScene(TimelineScene):
@@ -184,8 +179,6 @@ class DayScene(TimelineScene):
         # Update the scene rect and its reference point.
         bounding = self.itemsBoundingRect()
         self.setSceneRect(0, 0, bounding.width(), MAX_BAR_HEIGHT)
-
-        self.isLoaded = True
 
 
 class Node:

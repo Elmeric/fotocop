@@ -1,7 +1,7 @@
 import logging
 from enum import IntEnum
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Tuple
+from typing import TYPE_CHECKING, Any, List
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -63,7 +63,6 @@ class ImageModel(QtCore.QAbstractListModel):
             return images[row].name
 
         if role == ImageModel.UserRoles.ThumbnailRole:
-        # if role == QtCore.Qt.UserRole:
             return images[row].getThumbnail()
 
         if role == ImageModel.UserRoles.DateTimeRole:
@@ -124,8 +123,11 @@ class ImageModel(QtCore.QAbstractListModel):
                 break
         if found:
             index = self.index(row, 0)
-            self.dataChanged.emit(index, index, (ImageModel.UserRoles.ThumbnailRole, ImageModel.UserRoles.DateTimeRole))
-            # self.dataChanged.emit(index, index, (QtCore.Qt.UserRole, QtCore.Qt.ToolTipRole))
+            self.dataChanged.emit(
+                index,
+                index,
+                (ImageModel.UserRoles.ThumbnailRole, ImageModel.UserRoles.DateTimeRole)
+            )
 
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
@@ -304,6 +306,8 @@ class ThumbnailViewer(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self._sourceSelection = None
+
         resources = Config.fotocopSettings.resources
 
         iconSize = QtCore.QSize(24, 24)
@@ -346,10 +350,6 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.filterBtn.setToolTip('Filter images by selecting dates in the timeline')
         self.filterBtn.setStatusTip('Filter images by selecting dates in the timeline')
         self.selStatusLbl = QtWidgets.QLabel("")
-        # self.fromDateSelector = QtWidgets.QDateEdit()
-        # self.fromDateSelector.setCalendarPopup(True)
-        # self.toDateSelector = QtWidgets.QDateEdit()
-        # self.toDateSelector.setCalendarPopup(True)
 
         self.zoomLevelSelector = QtWidgets.QComboBox()
         for z in tlv.ZoomLevel:
@@ -363,8 +363,6 @@ class ThumbnailViewer(QtWidgets.QWidget):
         hlayout.addWidget(self.noneBtn)
         hlayout.addWidget(self.filterBtn)
         hlayout.addWidget(self.selStatusLbl)
-        # hlayout.addWidget(self.fromDateSelector)
-        # hlayout.addWidget(self.toDateSelector)
         hlayout.addWidget(self.zoomLevelSelector)
         hlayout.addWidget(self.hoveredNodeLbl)
         hlayout.addStretch()
@@ -374,14 +372,13 @@ class ThumbnailViewer(QtWidgets.QWidget):
         layout.addLayout(hlayout)
         self.setLayout(layout)
 
+        self.thumbnailView.model().dataChanged.connect(self.onImageModelChanged)
         self.allBtn.clicked.connect(
             lambda: self.setSelected(QtCore.Qt.Checked)
         )
         self.noneBtn.clicked.connect(
             lambda: self.setSelected(QtCore.Qt.Unchecked)
         )
-        # self.fromDateSelector.dateChanged.connect(self.setFromDate)
-        # self.toDateSelector.dateChanged.connect(self.setToDate)
         self.filterBtn.toggled.connect(self.toggleFilter)
         self.zoomLevelSelector.activated.connect(
             lambda: self.zoomLevelChanged.emit(self.zoomLevelSelector.currentData())
@@ -389,18 +386,22 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
-        # self.fromDateSelector.setDate(QtCore.QDate.currentDate())
-        # self.toDateSelector.setDate(QtCore.QDate.currentDate())
         self.filterBtn.setChecked(False)
+        self.filterBtn.setEnabled(False)
+        self.selStatusLbl.hide()
+        self.zoomLevelSelector.setEnabled(False)
 
     @QtCore.pyqtSlot(Selection)
-    def clearImages(self, _selection):
+    def setSourceSelection(self, selection):
+        self._sourceSelection = selection
         self.filterBtn.setChecked(False)
         self.thumbnailView.model().sourceModel().clearImages()
         self.thumbnailView.model().setTimeRangeFilter([TimeRange()])
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
+        self.filterBtn.setEnabled(False)
         self.selStatusLbl.hide()
+        self.zoomLevelSelector.setEnabled(False)
 
     @QtCore.pyqtSlot(dict)
     def addImages(self, images):
@@ -414,28 +415,25 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.thumbnailView.model().sourceModel().updateImage(imageKey)
 
     def setSelected(self, state: QtCore.Qt.CheckState):
-        model = self.thumbnailView.model().sourceModel()
+        model = self.thumbnailView.model()
         for i in range(model.rowCount()):
             index = model.index(i, 0, QtCore.QModelIndex())
             model.setData(index, state, QtCore.Qt.CheckStateRole)
+        self._updateSelStatus()
 
-    # @QtCore.pyqtSlot(QtCore.QDate)
-    # def setFromDate(self, date: QtCore.QDate):
-    #     fromDate = date.toString("yyyyMMdd")
-    #     # fromDate = date.toPyDate()
-    #     toDate = self.toDateSelector.date().toString("yyyyMMdd")
-    #     self.thumbnailView.model().setDateFilter((fromDate, toDate))
-
-    # @QtCore.pyqtSlot(QtCore.QDate)
-    # def setToDate(self, date: QtCore.QDate):
-    #     toDate = date.toString("yyyyMMdd")
-    #     fromDate = self.fromDateSelector.date().toString("yyyyMMdd")
-    #     self.thumbnailView.model().setDateFilter((fromDate, toDate))
+    @QtCore.pyqtSlot(QtCore.QModelIndex, QtCore.QModelIndex, "QVector<int>")
+    def onImageModelChanged(
+            self,
+            _topleft: QtCore.QModelIndex,
+            _bottomright: QtCore.QModelIndex,
+            roles: List[int]):
+        if QtCore.Qt.CheckStateRole in roles:
+            self._updateSelStatus()
 
     @QtCore.pyqtSlot(bool)
     def toggleFilter(self, checked: bool):
         self.thumbnailView.model().setIsDateFilterOn(checked)
-        self.updateSelStatus()
+        self._updateSelStatus()
 
     @QtCore.pyqtSlot(tlv.ZoomLevel)
     def onZoomLevelChanged(self, zoomLevel: tlv.ZoomLevel):
@@ -450,14 +448,26 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(list)
     def updateTimeRange(self, timeRange: List["TimeRange"]):
+        if timeRange:
+            self.filterBtn.setChecked(True)
+        else:
+            self.filterBtn.setChecked(False)
         self.thumbnailView.model().setTimeRangeFilter(timeRange)
-        self.updateSelStatus()
+        self._updateSelStatus()
 
-    def updateSelStatus(self):
+    @QtCore.pyqtSlot()
+    def activateDateFilter(self):
+        self.filterBtn.setChecked(False)
+        self.filterBtn.setEnabled(True)
+        self.selStatusLbl.show()
+        self.zoomLevelSelector.setEnabled(True)
+        self._updateSelStatus()
+
+    def _updateSelStatus(self):
         imagesCount = self.thumbnailView.model().sourceModel().rowCount()
         imagesShown = self.thumbnailView.model().rowCount()
-        self.selStatusLbl.show()
-        self.selStatusLbl.setText(f"Show {imagesShown} images on {imagesCount}")
+        selectedImagesCount = self._sourceSelection.selectedImagesCount
+        self.selStatusLbl.setText(f"Show {imagesShown} images on {imagesCount}, {selectedImagesCount} are selected")
 
 
 class ThumbnailView(QtWidgets.QListView):
@@ -482,7 +492,6 @@ class ThumbnailView(QtWidgets.QListView):
             # Must set this to False before adjusting the selection!
             self.possiblyPreserveSelectionPostClick = False
 
-            # print("Selection preserved")
             current = self.currentIndex()
             if not(len(selected.indexes()) == 1 and selected.indexes()[0] == current):
                 # Other items than the current one are selected: add the selection to
@@ -492,19 +501,19 @@ class ThumbnailView(QtWidgets.QListView):
 
     @QtCore.pyqtSlot(QtGui.QMouseEvent)
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        """
-        Filter selection changes when click is on a thumbnail checkbox.
+        """Filter selection changes when click is on a thumbnail checkbox.
 
         When the user has selected multiple items (thumbnails), and
         then clicks one of the checkboxes, Qt's default behaviour is to
         treat that click as selecting the single item, because it doesn't
-        know about our checkboxes. Therefore if the user is in fact
+        know about our checkboxes. Therefore, if the user is in fact
         clicking on a checkbox, we need to filter that event.
 
         On some versions of Qt 5 (to be determined), no matter what we do here,
         the delegate's editorEvent will still be triggered.
 
-        :param event: the mouse click event
+        Args:
+            event: the mouse click event
         """
         rightButtonPressed = event.button() == QtCore.Qt.RightButton
         if rightButtonPressed:
@@ -521,7 +530,6 @@ class ThumbnailView(QtWidgets.QListView):
                 checkboxClicked = checkboxRect.contains(event.pos())
 
                 if checkboxClicked:
-                    # print("Preserving selection")
                     self.possiblyPreserveSelectionPostClick = True
                     selected = self.selectionModel().selection()
                     model = self.model()
@@ -542,13 +550,14 @@ class ThumbnailView(QtWidgets.QListView):
         When the user has selected multiple items (thumbnails), and
         then clicks one of the checkboxes, Qt's default behaviour is to
         treat that click as selecting the single item, because it doesn't
-        know about our checkboxes. Therefore if the user is in fact
+        know about our checkboxes. Therefore, if the user is in fact
         clicking on a checkbox, we need to filter that event.
 
         On some versions of Qt 5 (to be determined), no matter what we do here,
         the delegate's editorEvent will still be triggered.
 
-        :param event: the mouse click event
+        Args:
+            event: the mouse click event
         """
         selectedIndexes = self.selectionModel().selection().indexes()
         if len(selectedIndexes) < 1 or event.key() not in (QtCore.Qt.Key_Space, QtCore.Qt.Key_Select):
@@ -568,17 +577,8 @@ class ThumbnailView(QtWidgets.QListView):
 
 class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
 
-    # _dateFilter: Tuple[str, str] = tuple()
     _isDateFilterOn: bool = False
     _timeRangeFilter: List["TimeRange"] = [TimeRange()]
-
-    # @classmethod
-    # def dateFilter(cls) -> Tuple[str, str]:
-    #     return cls._dateFilter
-
-    # def setDateFilter(self, value: Tuple[str, str]):
-    #     ThumbnailFilterProxyModel._dateFilter = value
-    #     self.invalidateFilter()
 
     @classmethod
     def timeRangeFilter(cls) -> List["TimeRange"]:
@@ -609,10 +609,5 @@ class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
                 OkDate = any(
                     [tr.start <= dateTime <= tr.end for tr in self.timeRangeFilter()]
                 )
-
-                # start, end = self.dateFilter()
-                # start = datetime.strptime(start, "%Y%m%d")
-                # end = datetime.strptime(end, "%Y%m%d")
-                # OkDate = start <= dateTime <= end
 
         return OkDate

@@ -82,6 +82,8 @@ class Selection:
         self.timeline = Timeline()
         self.thumbnailCache = LRUCache(Selection.THUMBNAIL_CACHE_SIZE)
 
+        self.selectedImagesCount = 0
+
         self.imagesCount = -1
         self._receivedExifCount = 0
 
@@ -104,6 +106,8 @@ class Selection:
         newImages = {path: Image(name, path) for name, path in images if path.startswith(currentPath)}
         if newImages:
             self.images.update(newImages)
+            # New images are selected by default
+            self.selectedImagesCount += len(newImages)
             logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
             SourceManager().imagesBatchLoaded.emit(newImages)
 
@@ -152,13 +156,25 @@ class Image:
     path: str
 
     def __post_init__(self):
-        self.isSelected: bool = True
+        self._isSelected: bool = True
         self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
         self.loadingInProgress = False
 
     @property
     def isLoaded(self) -> bool:
         return self._datetime is not None
+
+    @property
+    def isSelected(self) -> bool:
+        return self._isSelected
+
+    @isSelected.setter
+    def isSelected(self, value: bool):
+        old = self._isSelected
+        if value != old:
+            self._isSelected = value    # noqa
+            sel = 1 if value else -1
+            SourceManager().selection.selectedImagesCount += sel
 
     @property
     def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:

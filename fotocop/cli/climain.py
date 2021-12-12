@@ -1,7 +1,6 @@
 """Entry point for the Command Line version of fotocop.
 """
 import fotocop.__about__ as __about__
-from fotocop.util import datatypes as dt
 from fotocop.util import waiting
 
 __all__ = ['CliMain']

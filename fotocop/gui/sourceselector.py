@@ -6,7 +6,6 @@ import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
-from fotocop.util.collapsiblewidget import CollapsibleWidget
 from fotocop.models import settings as Config
 from fotocop.models.sources import SourceType, DriveType, Selection
 
@@ -15,6 +14,14 @@ if TYPE_CHECKING:
 
 
 class SourceSelector(QtWidgets.QWidget):
+
+    DRIVE_ICON = {
+        DriveType.LOCAL: "drive.png",
+        DriveType.NETWORK: "network-drive.png",
+        DriveType.CD: "CD.png",
+        DriveType.REMOVABLE: "device.png",
+    }
+
     def __init__(self, sourceManager: "SourceManager", parent=None):
         super().__init__(parent)
 
@@ -38,12 +45,14 @@ class SourceSelector(QtWidgets.QWidget):
         self.sourceLbl.setFixedWidth(350)
         self.sourceLbl.setText("Select a source")
         self.sourceLbl.setToolTip("")
+        self.sourceLbl.setStatusTip("")
 
         deviceLbl = QtWidgets.QLabel("DEVICES")
         deviceLbl.setMaximumHeight(24)
         refreshDevBtn = QtWidgets.QPushButton(refreshIcon, "")
         refreshDevBtn.setIconSize(iconSize)
         refreshDevBtn.setToolTip(refreshTip)
+        refreshDevBtn.setStatusTip(refreshTip)
         refreshDevBtn.setFlat(True)
         self.ejectChk = QtWidgets.QCheckBox("Eject after copy")
         self.ejectChk.setChecked(False)
@@ -60,6 +69,7 @@ class SourceSelector(QtWidgets.QWidget):
         refreshFileBtn = QtWidgets.QPushButton(refreshIcon, "")
         refreshFileBtn.setIconSize(iconSize)
         refreshFileBtn.setToolTip(refreshTip)
+        refreshFileBtn.setStatusTip(refreshTip)
         refreshFileBtn.setFlat(True)
         self.subDirsChk = QtWidgets.QCheckBox("Include sub folders")
         self.subDirsChk.setChecked(False)
@@ -69,7 +79,7 @@ class SourceSelector(QtWidgets.QWidget):
         self.fsModel.setOption(QtWidgets.QFileSystemModel.DontUseCustomDirectoryIcons)
         self.fsModel.setOption(QtWidgets.QFileSystemModel.DontWatchForChanges)
         self.fsModel.setFilter(QtCore.QDir.NoDotAndDotDot | QtCore.QDir.AllDirs)
-        self.diskHeaders = dict()
+        self.diskHeaders = dict()   # Container for 'disk' collapsibleWidgets
 
         srcLayout = QtWidgets.QHBoxLayout()
         srcLayout.addWidget(self.sourcePix, 0, QtCore.Qt.AlignCenter)
@@ -112,32 +122,42 @@ class SourceSelector(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
-        refreshDevBtn.clicked.connect(self.refreshSources)
-        refreshFileBtn.clicked.connect(self.refreshSources)
+        refreshDevBtn.clicked.connect(lambda: self.displaySources(enumerateFirst=True))
+        refreshFileBtn.clicked.connect(lambda: self.displaySources(enumerateFirst=True))
         self.devicesLst.selectionModel().selectionChanged.connect(
             self.onDeviceSelection
         )
 
-        QtCore.QTimer.singleShot(50, self.refreshSources)
+        # QtCore.QTimer.singleShot(50, self.displaySources)
 
     @QtCore.pyqtSlot()
-    def refreshSources(self):
+    def displaySources(self, enumerateFirst: bool = False):
         resources = Config.fotocopSettings.resources
         manager = self.sourceManager
 
-        manager.enumerateSources()
+        devices, logicalDisks = manager.getSources(enumerateFirst)
+
+        selection = manager.selection
+        sourceKind = selection.kind
+        source = selection.source
+
+        # Build the devices list from the source manager data.
+        with QtCore.QSignalBlocker(self.devicesLst.selectionModel()):
+            self.devicesLst.clear()
 
         noDevice = True
-        self.devicesLst.clear()
-        for row, device in enumerate(manager.getDevices()):
+        for row, device in enumerate(devices):
             noDevice = False
             icon = QtGui.QIcon(f"{resources}/device.png")
             item = QtWidgets.QListWidgetItem(icon, device.caption)
             item.setToolTip(device.name)
+            item.setStatusTip(device.name)
             item.setData(QtCore.Qt.UserRole, device)
             self.devicesLst.addItem(item)
-            if row == 0:
-                self.devicesLst.setCurrentRow(row)
+            if sourceKind == SourceType.DEVICE and source == device:
+                # Select this device if it is the current source manager selection.
+                with QtCore.QSignalBlocker(self.devicesLst.selectionModel()):
+                    self.devicesLst.setCurrentRow(row)
                 self.devicesLst.setFocus()
 
         # https://stackoverflow.com/questions/6337589/qlistwidget-adjust-size-to-content
@@ -146,50 +166,73 @@ class SourceSelector(QtWidgets.QWidget):
             + 2 * self.devicesLst.frameWidth()
         )
 
+        # Show the devices list or a 'no device' label whether a device exists or not.
         self.devicesLst.setVisible(not noDevice)
         self.noDeviceLbl.setVisible(noDevice)
 
+        #
+        # Build the drive list from the source manager data.
+        # Each drive is set in a header collapsible widget and shows the file system
+        # model from the drive's root in a tree view.
         for header, tree in self.diskHeaders.values():
-            tree.clearSelection()
+            with QtCore.QSignalBlocker(tree.selectionModel()):
+                tree.clearSelection()
             self.diskLayout.removeWidget(header)
             del header
         self.diskHeaders.clear()
-        for drive in manager.getDrives():
+
+        selDriveId = None
+        for drive in logicalDisks:
             driveId = drive.id
-            header = CollapsibleWidget(title=drive.caption, isCollapsed=True)
+            header = QtUtil.CollapsibleWidget(title=drive.caption, isCollapsed=True)
             tree = QtWidgets.QTreeView()
             tree.setModel(self.fsModel)
             tree.setRootIndex(self.fsModel.index(f"{driveId}\\\\"))
             tree.setAnimated(False)
             tree.setIndentation(10)
             tree.setSortingEnabled(False)
+            tree.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerItem)
             tree.header().hide()
             for i in range(1, self.fsModel.columnCount()):
                 tree.hideColumn(i)
             tree.collapseAll()
             tree.selectionModel().selectionChanged.connect(
-                lambda selected, unselected, d=driveId: self.onFileSelection(
-                    selected, unselected, d
-                )
+                lambda selected, unselected, d=driveId: self.onFolderSelection(selected, unselected, d)
             )
             header.addWidget(tree)
             self.diskHeaders[driveId] = header, tree
+            if sourceKind == SourceType.DRIVE and source == drive:
+                selDriveId = driveId
 
         for header, _ in self.diskHeaders.values():
             self.diskLayout.addWidget(header)
+
+        # Select this drive and path if it is the current source manager selection.
+        if selDriveId is not None:
+            selHeader, selTree = self.diskHeaders[selDriveId]
+            selHeader.toggleCollapsed()
+            path = source.selectedPath.as_posix()
+            index = self.fsModel.index(path, 0)
+            selTree.scrollTo(index, QtWidgets.QAbstractItemView.EnsureVisible)
+            with QtCore.QSignalBlocker(selTree.selectionModel()):
+                selTree.setCurrentIndex(index)
+            with QtCore.QSignalBlocker(self.subDirsChk):
+                self.subDirsChk.setChecked(source.subDirs)
+            selTree.setFocus()
 
     @QtCore.pyqtSlot(QtCore.QItemSelection, QtCore.QItemSelection)
     def onDeviceSelection(
         self, selected: QtCore.QItemSelection, _deselected: QtCore.QItemSelection
     ):
         if not selected.indexes():
-            # Clear any selected device by selecting an unknown device
+            # No device selected: clear any selected one by selecting an unknown device
             self.sourceManager.selectDevice("NOTHING")
             return
 
-        # Deselect any selected drive
+        # A device is selected: deselect any selected drive
         for _, tree in self.diskHeaders.values():
-            tree.selectionModel().clearSelection()
+            with QtCore.QSignalBlocker(tree.selectionModel()):
+                tree.selectionModel().clearSelection()
 
         # Select the new device
         index = selected.indexes()[0]
@@ -205,36 +248,39 @@ class SourceSelector(QtWidgets.QWidget):
     def onEjectSelection(self, _state: int):
         self.sourceManager.setDeviceEjectState(self.ejectChk.isChecked())
 
-    def onFileSelection(
+    def onFolderSelection(
         self,
         selected: QtCore.QItemSelection,
         _deselected: QtCore.QItemSelection,
         selectedDrive: str,
     ):
         if not selected.indexes():
-            # Clear any selected drive by selecting an unknown drive
+            # No drive/folder selected: clear any selected drive by selecting an unknown drive
             self.sourceManager.selectDrive("NOTHING", Path())
             return
 
-        # Deselect device and any other selected drive
-        self.devicesLst.selectionModel().clearSelection()
+        # A drive/folder is selected: deselect device and any other selected drive
+        with QtCore.QSignalBlocker(self.devicesLst.selectionModel()):
+            self.devicesLst.selectionModel().clearSelection()
         for driveId, (_, tree) in self.diskHeaders.items():
             if driveId != selectedDrive:
-                tree.selectionModel().clearSelection()
+                with QtCore.QSignalBlocker(tree.selectionModel()):
+                    tree.selectionModel().clearSelection()
 
-        # Select the new drive
+        # Select the new drive and folder
         index = selected.indexes()[0]
         model = index.model()
         path = Path(model.filePath(index))
         self.sourceManager.selectDrive(selectedDrive, path, self.subDirsChk.isChecked())
 
     @QtCore.pyqtSlot(Selection)
-    def onSourceSelected(self, selection: Selection):
+    def displaySelectedSource(self, selection: Selection):
         resources = Config.fotocopSettings.resources
 
         source = selection.source
         kind = selection.kind
 
+        # Display source info in the source selector header according to its kind
         if kind == SourceType.DEVICE:
             caption = source.caption
             self.sourcePix.setPixmap(
@@ -243,18 +289,12 @@ class SourceSelector(QtWidgets.QWidget):
                 )
             )
             self._setElidedText(self.sourceLbl, f"FROM {caption}\nAll pictures")
-            self.sourceLbl.setToolTip(f"Device: {caption}")
+            toolTip = f"Device: {caption}"
+            self.sourceLbl.setToolTip(toolTip)
+            self.sourceLbl.setStatusTip(toolTip)
 
         elif kind == SourceType.DRIVE:
-            driveKind = source.kind
-            if driveKind == DriveType.LOCAL:
-                icon = "drive.png"
-            elif driveKind == DriveType.NETWORK:
-                icon = "network-drive.png"
-            elif driveKind == DriveType.CD:
-                icon = "CD.png"
-            else:
-                icon = "device.png"
+            icon = SourceSelector.DRIVE_ICON.get(source.kind, "drive.png")
             self.sourcePix.setPixmap(
                 QtGui.QPixmap(f"{resources}/{icon}").scaledToHeight(
                     48, QtCore.Qt.SmoothTransformation
@@ -265,12 +305,11 @@ class SourceSelector(QtWidgets.QWidget):
             sourcePath = path[3:].replace("/", " / ")
             subDirs = source.subDirs
             self._setElidedText(self.sourceLbl, f"FROM {caption}\n{sourcePath}{' +' if subDirs else ''}")
-            self.sourceLbl.setToolTip(
-                f"Drive: {caption}\nPath: {path}"
-                f"{' (including subfolders)' if subDirs else ''}"
-            )
+            toolTip = f"Drive: {caption}\nPath: {path}{' (including subfolders)' if subDirs else ''}"
+            self.sourceLbl.setToolTip(toolTip)
+            self.sourceLbl.setStatusTip(toolTip)
 
-        else:
+        else:   # SourceType.UNKNOWN
             self.sourcePix.setPixmap(
                 QtGui.QPixmap(f"{resources}/double-down.png").scaledToHeight(
                     48, QtCore.Qt.SmoothTransformation
@@ -278,6 +317,7 @@ class SourceSelector(QtWidgets.QWidget):
             )
             self.sourceLbl.setText("Select a source")
             self.sourceLbl.setToolTip("")
+            self.sourceLbl.setStatusTip("")
 
     @staticmethod
     def _setElidedText(label: QtWidgets.QLabel, text: str):

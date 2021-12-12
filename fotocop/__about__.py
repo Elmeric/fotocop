@@ -7,7 +7,7 @@ __all__ = [
 ]
 
 __title__ = 'fotocop'
-__summary__ = 'Downloads and renames photos from memory cards and other devices'
+__summary__ = 'Download and rename photos from memory cards and other devices'
 __uri__ = 'https://www.elmeric.fr/fotocop'
 
 __version__ = '1.0.0a1'

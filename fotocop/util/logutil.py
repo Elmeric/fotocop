@@ -29,23 +29,28 @@ class _LogServer(mp.Process):
         logging_format = '%(processName)-15s%(levelname)s: %(message)s'
         logging_date_format = '%Y-%m-%d %H:%M:%S'
         # file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(name)s %(filename)s %(lineno)d: %(message)s'
-        file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(message)s'
+        file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(threadName)-20s %(message)s'
+        consoleLogLevel = logging.WARNING
 
         root = logging.getLogger()
-        filehandler = logging.FileHandler(self.logFile, mode='w')
-        filehandler.setLevel(self.logLevel)
-        filehandler.setFormatter(logging.Formatter(file_logging_format, logging_date_format))
-        # filehandler.setFormatter(logging.Formatter(file_logging_format))
-        root.addHandler(filehandler)
+        try:
+            filehandler = logging.FileHandler(self.logFile, mode='w')
+        except OSError:
+            consoleLogLevel = self.logLevel
+        else:
+            filehandler.setLevel(self.logLevel)
+            filehandler.setFormatter(logging.Formatter(file_logging_format, logging_date_format))
+            # filehandler.setFormatter(logging.Formatter(file_logging_format))
+            root.addHandler(filehandler)
+        finally:
+            if self.logOnConsolde:
+                consolehandler = logging.StreamHandler()
+                consolehandler.set_name('console')
+                consolehandler.setFormatter(logging.Formatter(logging_format))
+                consolehandler.setLevel(consoleLogLevel)
+                root.addHandler(consolehandler)
 
-        if self.logOnConsolde:
-            consolehandler = logging.StreamHandler()
-            consolehandler.set_name('console')
-            consolehandler.setFormatter(logging.Formatter(logging_format))
-            consolehandler.setLevel(logging.INFO)
-            root.addHandler(consolehandler)
-
-        root.setLevel(logging.DEBUG)
+            root.setLevel(logging.DEBUG)
 
     def run(self):
         self.configure()
@@ -56,6 +61,7 @@ class _LogServer(mp.Process):
                 except Empty:
                     continue
                 if record is None:  # We send this as a sentinel to tell the listener to quit.
+                    print("Stopping LogServer...")
                     break
                 logger = logging.getLogger(record.name)
                 logger.handle(record)
@@ -91,8 +97,10 @@ class LogConfig(metaclass=Singleton):
         configureRootLogger(self.logQueue, self.logLevel)
 
     def stopLogging(self):
+        time.sleep(1)
         self.logQueue.put_nowait(None)
         self.logServer.join()
+        print("LogServer stopped")
 
 
 def configureRootLogger(logQueue: mp.Queue, logLevel: Union[int, str]):

@@ -270,17 +270,3 @@ class NodeMixin(object):
     def _post_attach(self, parent):
         """Method call after attaching to `parent`."""
         pass
-
-    def childCount(self):
-        return len(self.children)
-
-    def childRow(self):
-        if self.parent:
-            return self.parent.children.index(self, )
-        return 0
-
-    def childAtRow(self, row: int):
-        try:
-            return self.children[row]
-        except IndexError:
-            return None

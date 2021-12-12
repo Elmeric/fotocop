@@ -1,3 +1,9 @@
+"""A PyQt collapsible widget.
+
+From https://github.com/By0ute/pyqt-collapsible-widget.
+Adapt and port to PyQt5.
+"""
+
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List
+from typing import List
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -6,20 +6,17 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.models.timeline import SelectionFlag, SelectionState
-from .tlv import ZoomLevel, DEFAULT_ZOOM_LEVEL, MAX_BAR_HEIGHT
-
-if TYPE_CHECKING:
-    from .timelinescene import NodeGraphicsObject
+from . import tlv
 
 
 class TimelineView(QtWidgets.QGraphicsView):
 
-    zoomed = QtCore.pyqtSignal(ZoomLevel)
+    zoomed = QtCore.pyqtSignal(tlv.ZoomLevel)
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
 
-        self.zoomLevel = DEFAULT_ZOOM_LEVEL
+        self.zoomLevel = tlv.DEFAULT_ZOOM_LEVEL
 
         self._selectionInProgress = False
         self._firstSelectedItem = None
@@ -62,10 +59,10 @@ class TimelineView(QtWidgets.QGraphicsView):
 
     def resizeEvent(self, event: QtGui.QResizeEvent):
         self.fitInView(
-            QtCore.QRectF(0, 0, event.size().width(), MAX_BAR_HEIGHT),
+            QtCore.QRectF(0, 0, event.size().width(), tlv.MAX_BAR_HEIGHT),
             QtCore.Qt.KeepAspectRatioByExpanding,
         )
-        self.ensureVisible(QtCore.QRectF(0, 0, 100, MAX_BAR_HEIGHT), 0, 0)
+        self.ensureVisible(QtCore.QRectF(0, 0, 100, tlv.MAX_BAR_HEIGHT), 0, 0)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent):
         if event.button() == QtCore.Qt.LeftButton:
@@ -77,7 +74,7 @@ class TimelineView(QtWidgets.QGraphicsView):
                 posView = event.pos()
                 # Translate the selected position to the timeline bottom to favor child
                 # selection besides parent.
-                posView.setY(MAX_BAR_HEIGHT)
+                posView.setY(tlv.MAX_BAR_HEIGHT)
                 item = self.itemAt(posView)
                 if item is not None:
                     # A node is under the mouse: enter in selection mode and remember it
@@ -128,7 +125,7 @@ class TimelineView(QtWidgets.QGraphicsView):
                                 selection.selectionState(item.node.timelineNode) in (
                                     SelectionState.Selected, SelectionState.PartiallySelected
                                 )
-                            )
+                                )
                         ]
 
                 else:
@@ -206,7 +203,7 @@ class TimelineView(QtWidgets.QGraphicsView):
                 self._firstSelectedItem = None
                 self._selectionInProgress = False
 
-                print(f"Selected time ranges: {scene.timeline.selectionModel().selectedRanges()}")
+                # print(f"Selected time ranges: {scene.timeline.selectionModel().selectedRanges()}")
         else:
             super().mouseReleaseEvent(event)
 
@@ -243,10 +240,10 @@ class TimelineView(QtWidgets.QGraphicsView):
 
         if delta > 0.0:
             # Scale up
-            zoom = ZoomLevel(min(ZoomLevel.DAY, self.zoomLevel + 1))
+            zoom = tlv.ZoomLevel(min(tlv.ZoomLevel.DAY, self.zoomLevel + 1))
         else:
             # Scale down
-            zoom = ZoomLevel(max(ZoomLevel.YEAR, self.zoomLevel - 1))
+            zoom = tlv.ZoomLevel(max(tlv.ZoomLevel.YEAR, self.zoomLevel - 1))
         if zoom != self.zoomLevel:
             self.zoom(zoom)
 
@@ -272,8 +269,8 @@ class TimelineView(QtWidgets.QGraphicsView):
 
         super().keyReleaseEvent(event)
 
-    @QtCore.pyqtSlot(ZoomLevel)
-    def zoom(self, value: ZoomLevel):
+    @QtCore.pyqtSlot(tlv.ZoomLevel)
+    def zoom(self, value: tlv.ZoomLevel):
         if value != self.zoomLevel:
             self.zoomLevel = value
             self.update()

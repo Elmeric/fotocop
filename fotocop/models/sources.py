@@ -1,6 +1,6 @@
 import logging
 
-from typing import Optional, Tuple, List,  Union
+from typing import Optional, Tuple, List, Union
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from pathlib import Path
@@ -9,7 +9,7 @@ from threading import Thread
 
 import wmi
 
-from fotocop.util.lru import LRUCache
+from fotocop.util.cache import LRUCache
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.threadutil import StoppableThread
 from fotocop.util.basicpatterns import Singleton
@@ -158,6 +158,7 @@ class Image:
     def __post_init__(self):
         self._isSelected: bool = True
         self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
+        self.session = ""
         self.loadingInProgress = False
 
     @property
@@ -421,7 +422,8 @@ class SourceManager(metaclass=Singleton):
         self.sourceEnumerated.emit()
 
     def getSources(self, enumerateFirst: bool = False) -> Tuple[List[Device], List[LogicalDisk]]:
-        if enumerateFirst or not self.logicalDisks:
+        if enumerateFirst:
+        # if enumerateFirst or not self.logicalDisks:
             # Enumeration required or sources not yet enumerated: do it! (do not test on
             # self.devices as it may be empty after sources enumeration if no devices
             # are connected).

@@ -6,7 +6,6 @@ import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
-from fotocop.util.collapsiblewidget import CollapsibleWidget
 from fotocop.models import settings as Config
 from fotocop.models.sources import SourceType, DriveType, Selection
 
@@ -129,7 +128,7 @@ class SourceSelector(QtWidgets.QWidget):
             self.onDeviceSelection
         )
 
-        QtCore.QTimer.singleShot(50, self.displaySources)
+        # QtCore.QTimer.singleShot(50, self.displaySources)
 
     @QtCore.pyqtSlot()
     def displaySources(self, enumerateFirst: bool = False):
@@ -185,7 +184,7 @@ class SourceSelector(QtWidgets.QWidget):
         selDriveId = None
         for drive in logicalDisks:
             driveId = drive.id
-            header = CollapsibleWidget(title=drive.caption, isCollapsed=True)
+            header = QtUtil.CollapsibleWidget(title=drive.caption, isCollapsed=True)
             tree = QtWidgets.QTreeView()
             tree.setModel(self.fsModel)
             tree.setRootIndex(self.fsModel.index(f"{driveId}\\\\"))

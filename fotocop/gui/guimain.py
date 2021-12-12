@@ -3,7 +3,6 @@
 import sys
 import os
 import logging
-import time
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -11,7 +10,6 @@ import PyQt5.QtGui as QtGui
 
 import fotocop.__about__ as __about__
 from fotocop.util.logutil import LogConfig
-from fotocop.util import datatypes as dt
 from fotocop.util import qtutil as QtUtil
 
 # Models
@@ -32,57 +30,41 @@ class QtMainView(QtWidgets.QMainWindow):
     """The fotocop main view.
 
     The Main view is composed of:
-        The project browser:  browse and edit a project content.
-        The adapter editor: browse and edit adapter's flows.
-        The interface editor: browse and edit interfaces abd data used as
-            adapter's input / ouput.
-        The toolbars: the global toolbars (project, edit, session, help) are
-            complemented with dynamic toolbars provided by the project browser,
-            adapter editor and interface editor.
+        The source selector:  browse and select an images' source.
+        The thumbnail viewer: show images from the selected source.
+        The timeline viewer: select a time range to filter the thumbnails.
+        The toolbar: propose acces to fotocop setings and help.
         The status bar: display information and warning messages.
-        The console view: keep a message history and show them on demand
 
     Args:
-        version: application version.
+        sourceManager: reference to the images' sources manager.
+        splash: reference to the splash screen to show the main view initialization
+            progress.
         *args, **kwargs: Any other positional and keyword argument are passed to
             the parent QMainWindow.
 
     Attributes:
-        version (str): application version.
-        project (Project): reference to the project model.
-        globalActions (GlobalActionHelper): registry and methods hosting the
-            edit actions (cut, copy paste and delete) global to the app's views.
-        projectBrowser (ProjectBrowser): reference to the project browser.
-        adapterEditor (AdapterEditor): reference to the adapter editor.
-        interfaceEditor (InterfacesEditor): reference to the interface editor.
-        msgHistory (MessageHistory): reference to the messages history model.
-        consoleView (ConsoleView): reference to the messages history view.
-        isConsoleVisible (bool): the messages history view show/hide state.
-        projectSaveAction (QAction): action associated to the save
-            toolbar button.
-        startAction (QAction): action that start the DCFS XML file generation
-            for the selected variability configuration.
-        workingVarConfSelector (QCombobow): reference to the current variabiity
-            configuration selector.
-        consoleButton (QToolButton): button to show/hide the console view.
-        status (QStatusBar): reference to the Main window status bar.
+        _sourceManager: reference to the images' sources manager.
+        _splash: reference to the splash screen to show the main view initialization
+            progress.
+        _status: reference to the Main window status bar.
     """
 
-    def __init__(self, sourceManager, splash, logConfig, *args, **kwargs):
+    def __init__(self, sourceManager: SourceManager, splash, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         splash.setProgress(10, "Create Gui objects...")
 
-        self.splash = splash
+        self._splash = splash
 
         resources = Config.fotocopSettings.resources
         selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
-        # Initialize the app's views. Init order to comply with the editors' dependencies.
-        self.sourceManager = sourceManager
-        # self.sourceManager = SourceManager()
-        self.sourceSelector = SourceSelector(self.sourceManager)
-        self.destSelector = QtUtil.DirectorySelector(
+        # Initialize the app's views. Init order fixed to comply with the editors' dependencies.
+        self._sourceManager = sourceManager
+        sourceSelector = SourceSelector(sourceManager)
+
+        destSelector = QtUtil.DirectorySelector(
             label="Destination folder:",
             placeHolder="Path to the destination folder",
             selectIcon=selectIcon,
@@ -94,22 +76,23 @@ class QtMainView(QtWidgets.QMainWindow):
             parent=self,
         )
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
-        self.thumbnailViewer = ThumbnailViewer()
+        thumbnailViewer = ThumbnailViewer()
 
-        self.timelineViewer = TimelineViewer(parent=self)
+        timelineViewer = TimelineViewer(parent=self)
 
-        self.sourceManager.sourceSelected.connect(self.sourceSelector.displaySelectedSource)
-        self.sourceManager.sourceSelected.connect(self.thumbnailViewer.setSourceSelection)
-        self.sourceManager.sourceSelected.connect(self.timelineViewer.setTimeline)
-        self.sourceManager.imagesBatchLoaded.connect(self.thumbnailViewer.addImages)
-        self.sourceManager.thumbnailLoaded.connect(self.thumbnailViewer.updateImage)
-        self.sourceManager.datetimeLoaded.connect(self.timelineViewer.updateTimeline)
-        self.sourceManager.timelineBuilt.connect(self.timelineViewer.finalizeTimeline)
-        self.sourceManager.timelineBuilt.connect(self.thumbnailViewer.activateDateFilter)
-        self.thumbnailViewer.zoomLevelChanged.connect(self.timelineViewer.zoom)
-        self.timelineViewer.zoomed.connect(self.thumbnailViewer.onZoomLevelChanged)
-        self.timelineViewer.hoveredNodeChanged.connect(self.thumbnailViewer.showNodeInfo)
-        self.timelineViewer.timeRangeChanged.connect(self.thumbnailViewer.updateTimeRange)
+        self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
+        self._sourceManager.sourceSelected.connect(sourceSelector.displaySelectedSource)
+        self._sourceManager.sourceSelected.connect(thumbnailViewer.setSourceSelection)
+        self._sourceManager.sourceSelected.connect(timelineViewer.setTimeline)
+        self._sourceManager.imagesBatchLoaded.connect(thumbnailViewer.addImages)
+        self._sourceManager.thumbnailLoaded.connect(thumbnailViewer.updateImage)
+        self._sourceManager.datetimeLoaded.connect(timelineViewer.updateTimeline)
+        self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
+        self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
+        thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
+        timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
+        timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)
+        timelineViewer.timeRangeChanged.connect(thumbnailViewer.updateTimeRange)
 
         splash.setProgress(30)
 
@@ -117,8 +100,8 @@ class QtMainView(QtWidgets.QMainWindow):
         vertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         vertSplitter.setChildrenCollapsible(False)
         vertSplitter.setHandleWidth(2)
-        vertSplitter.addWidget(self.thumbnailViewer)
-        vertSplitter.addWidget(self.timelineViewer)
+        vertSplitter.addWidget(thumbnailViewer)
+        vertSplitter.addWidget(timelineViewer)
         vertSplitter.setStretchFactor(0, 5)
         vertSplitter.setStretchFactor(1, 1)
         vertSplitter.setOpaqueResize(False)
@@ -126,9 +109,9 @@ class QtMainView(QtWidgets.QMainWindow):
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         horzSplitter.setChildrenCollapsible(False)
         horzSplitter.setHandleWidth(2)
-        horzSplitter.addWidget(self.sourceSelector)
+        horzSplitter.addWidget(sourceSelector)
         horzSplitter.addWidget(vertSplitter)
-        horzSplitter.addWidget(self.destSelector)
+        horzSplitter.addWidget(destSelector)
         horzSplitter.setStretchFactor(0, 1)
         horzSplitter.setStretchFactor(1, 3)
         horzSplitter.setStretchFactor(2, 1)
@@ -136,21 +119,7 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self.setCentralWidget(horzSplitter)
 
-        # resources = Config.fotocopSettings.resources
-
         # Build actions used in toolbars.
-        # projectNewAction = QtUtil.createAction(
-        #     self, '&New...', slot=self.newProject,
-        #     shortcut=QtGui.QKeySequence.New, icon=f'{resources}/filenew.png',
-        #     tip='Create a new DCFS project')
-        # projectOpenAction = QtUtil.createAction(
-        #     self, "&Open...", slot=self.openProject,
-        #     shortcut=QtGui.QKeySequence.Open, icon=f'{resources}/fileopen.png',
-        #     tip="Open an existing DCFS project")
-        # self.projectSaveAction = QtUtil.createAction(
-        #     self, "&Save", slot=self.saveProject,
-        #     shortcut=QtGui.QKeySequence.Save, icon=f'{resources}/filesave.png',
-        #     tip="Save the DCFS project")
         helpAboutAction = QtUtil.createAction(
             self,
             "&About",
@@ -167,27 +136,7 @@ class QtMainView(QtWidgets.QMainWindow):
             icon=f"{resources}/settings.png",
             tip="Adjust application settings",
         )
-        # showConsoleAction = QtUtil.createAction(
-        #     self, "Show", slot=self.toggleConsole,
-        #     shortcut="Alt+C", tip="Show last messages")
-        # self.startAction = QtUtil.createAction(
-        #     self, "Start", slot=self.startBuilder,
-        #     shortcut="CTRL+G", icon=QtGui.QIcon(f'{resources}/start.png'),
-        #     tip="Generate DCFS XML file")
         QtWidgets.QShortcut(QtGui.QKeySequence("CTRL+Q"), self, self.close)  # noqa
-
-        # The session toolbar content:
-        iconSize = QtCore.QSize(40, 40)
-
-        # workingVarConfLabel = QtWidgets.QLabel()
-        # workingVarConfLabel.setPixmap(QtGui.QPixmap(f'{resources}/work.png'))
-        # self.workingVarConfSelector = QtWidgets.QComboBox()
-        # self.workingVarConfSelector.setSizeAdjustPolicy(
-        #     QtWidgets.QComboBox.AdjustToContents
-        # )
-        # self.workingVarConfSelector.setToolTip('Select working variability configuration')
-        # self.workingVarConfSelector.setStatusTip('Select a working variability configuration')
-        # self.workingVarConfSelector.currentTextChanged.connect(self.selectVarConf)
 
         # To right-align the help toolbar.
         spacer = QtWidgets.QWidget(self)
@@ -195,30 +144,8 @@ class QtMainView(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
         )
 
-        # Build the main toolbars in the right order.
-        # projectToolbar = self.addToolBar("Project tools")
-        # projectToolbar.setIconSize(iconSize)
-        # projectToolbar.addActions(
-        #     (projectNewAction, projectOpenAction, self.projectSaveAction)
-        # )
-        #
-        # editToolbar = self.addToolBar("Edit tools")
-        # editToolbar.setIconSize(iconSize)
-        # editToolbar.addActions(self.globalActions.actions)
-        #
-        # self.addToolBar(self.projectBrowser.toolbarStack.toolbar())
-        # self.addToolBar(self.adapterEditor.flowsTbStack.toolbar())
-        # self.addToolBar(self.adapterEditor.flowIoTbStack.toolbar())
-        # self.addToolBar(self.vcsController.toolbar())
-        #
-        # sessionToolbar = self.addToolBar("Session tools")
-        # sessionToolbar.setIconSize(iconSize)
-        # sessionToolbar.addWidget(workingVarConfLabel)
-        # sessionToolbar.addWidget(self.workingVarConfSelector)
-        # sessionToolbar.addAction(self.startAction)
-
+        # Build the main toolbars.
         helpToolbar = self.addToolBar("Help tools")
-        # helpToolbar.setIconSize(iconSize)
         helpToolbar.addWidget(spacer)
         helpToolbar.addAction(settingsAction)
         helpToolbar.addSeparator()
@@ -227,19 +154,19 @@ class QtMainView(QtWidgets.QMainWindow):
         # Build the status bar.
         actionProgressBar = QtUtil.BackgroundProgressBar()
         actionProgressBar.hide()
-        self.sourceManager.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
-        self.sourceManager.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
-        self.sourceManager.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
+        self._sourceManager.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
+        self._sourceManager.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
+        self._sourceManager.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
 
-        self.status = self.statusBar()
-        self.status.setSizeGripEnabled(False)
-        self.status.addPermanentWidget(actionProgressBar)
-        self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
-        self.status.messageChanged.connect(self.onStatusChanged)
+        self._status = QtUtil.StatusBar()
+        self.setStatusBar(self._status)
+        self._status.addPermanentWidget(actionProgressBar)
 
+        # Enumerate images sources
         splash.setProgress(50, "Enumerating images sources...")
-        self.sourceManager.enumerateSources()
+        self._sourceManager.enumerateSources()
 
+        # Finalize the main window initialization once it is built.
         QtCore.QTimer.singleShot(0, self.initUI)
 
     def initUI(self):
@@ -247,34 +174,19 @@ class QtMainView(QtWidgets.QMainWindow):
 
         Called on an immediate timer once the main windows is built.
         """
-        self.splash.setProgress(70, "Load user settings")
+        self._splash.setProgress(70, "Load user settings")
 
         settings = Config.fotocopSettings
 
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
 
-        self.splash.setProgress(100)
+        self._splash.setProgress(100)
 
-    @QtCore.pyqtSlot(str)
-    def onStatusChanged(self, msg: str):
-        """Reset the status bar to the default style.
-
-        If there are no arguments (the message is being removed), change the
-        status message bar to its default style.
-
-        Args:
-            msg: the new temporary status message. Empty string when the
-                message has been removed.
-        """
-        if not msg:
-            self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
-
-    def showMessage(self, msg: str, isWarning: bool = False, delay: int = None):
+    def showStatusMessage(self, msg: str, isWarning: bool = False, delay: int = None):
         """Convenient function to display a status message.
 
-        Display a temporary message in the status bar with the right
-        style.
+        Encapsulate the displayMessage method of the customized statusBar.
 
         Args:
             msg: the message string to display.
@@ -282,15 +194,8 @@ class QtMainView(QtWidgets.QMainWindow):
                 (displayed in WARNING_MSG_STYLE for a longer default time).
             delay: the time to keep the message displayed
                 (default is 5s for an information and 2s for a warning).
-
         """
-        if isWarning:
-            self.status.setStyleSheet(dt.WARNING_MSG_STYLE)
-        else:
-            self.status.setStyleSheet(dt.DEFAULT_MSG_STYLE)
-        if not delay:
-            delay = dt.WARNING_MSG_DELAY if isWarning else dt.DEFAULT_MSG_DELAY
-        self.status.showMessage(msg, delay)
+        self._status.displayMessage(msg, isWarning, delay)
 
     def okToContinue(self) -> bool:
         """Authorize app exit, project creation or loading.
@@ -319,7 +224,8 @@ class QtMainView(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def adjustSettings(self):
-        """Show the DCFS settings dialog.
+        # TODO: Create a settings dialog.
+        """Show the Fotocop settings dialog.
 
         If dialog is accepted, the settings changes are saved.
         """
@@ -330,7 +236,7 @@ class QtMainView(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def helpAbout(self):
-        """Show the DCFS 'About' dialog."""
+        """Show the Fotocop 'About' dialog."""
         pass
         resources = Config.fotocopSettings.resources
         appName = __about__.__title__
@@ -365,7 +271,7 @@ class QtMainView(QtWidgets.QMainWindow):
         )  # noqa
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
-        """Trap the Escape key to close the close the application.
+        """Trap the Escape key to close the application.
 
         Reimplement the parent QMainWindow event handler to trap the Escape key
         pressed event. Other key pressed event are passed to the parent.
@@ -396,24 +302,6 @@ class QtMainView(QtWidgets.QMainWindow):
                 self.geometry().height(),
             )
 
-            # selection = self.sourceManager.selection
-            # source = selection.source
-            # if source:
-            #     kind = selection.kind
-            #     if kind == SourceType.DRIVE:
-            #         name = source.id
-            #         path = source.selectedPath
-            #         subDirs = source.subDirs
-            #     elif kind == SourceType.DEVICE:
-            #         name = source.name
-            #         path = subDirs = None
-            #     else:
-            #         name = path = subDirs = None
-            # else:
-            #     kind = SourceType.UNKNOWN
-            #     name = path = subDirs = None
-            # Config.fotocopSettings.lastSource = (name, kind.name, path, subDirs)
-
             try:
                 Config.fotocopSettings.save()
             except Config.settings.SettingsError:
@@ -427,9 +315,8 @@ class QtMainView(QtWidgets.QMainWindow):
                     # reject dialog close event
                     event.ignore()
             # Saving fotocopSettings OK or reply = QMessageBox.Yes: accept dialog close event
-            # else:
-            #     self.closeProject()
-            self.sourceManager.close()
+            else:
+                self._sourceManager.close()
         else:
             event.ignore()
 
@@ -474,17 +361,19 @@ def QtMain():
     f.setPointSize(fSize + 2)
     app.setFont(f)
 
+    # Initialize the images sources manager.
     sourceManager = SourceManager()
 
     # Build and show the splash screen.
-    # Use QIcon to render so we get the high DPI version automatically
-    size = QtCore.QSize(600, 400)
-    pixmap = QtUtil.scaledIcon(f"{resources}/splashscreen600.png", size).pixmap(size)
-    splash = QtUtil.SplashScreen(pixmap, __about__.__version__, QtCore.Qt.WindowStaysOnTopHint)
+    splash = QtUtil.SplashScreen(
+        f"{resources}/splashscreen600.png",
+        __about__.__version__,
+        QtCore.Qt.WindowStaysOnTopHint
+    )
     splash.show()
 
     # Build and show the main view after the splash screen delay.
-    mainView = QtMainView(sourceManager, splash, logConfig)
+    mainView = QtMainView(sourceManager, splash)
     splash.finish(mainView)
     mainView.show()
 

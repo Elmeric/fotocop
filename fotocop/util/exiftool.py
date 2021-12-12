@@ -28,7 +28,7 @@ process for every single query.
 
 .. _ExifTool: http://www.sno.phy.queensu.ca/~phil/exiftool/
 
-The source code can be checked out from the github repository with
+The source code can be checked out from the GitHub repository with
 
 ::
 
@@ -64,7 +64,7 @@ import codecs
 import logging
 
 try:        # Py3k compatibility
-    basestring
+    basestring                                                                  # noqa
 except NameError:
     basestring = (bytes, str)
 
@@ -86,6 +86,7 @@ sentinel = b"{ready}"
 # some cases.
 block_size = 4096
 
+
 # This code has been adapted from Lib/os.py in the Python source tree
 # (sha1 265e36e277f3)
 def _fscodec():
@@ -99,7 +100,7 @@ def _fscodec():
         else:
             errors = "surrogateescape"
 
-    def fsencode(filename):
+    def fsencode(filename):                                                     # noqa
         """
         Encode filename to the filesystem encoding with 'surrogateescape' error
         handler, return bytes unchanged. On Windows, use 'strict' error handler if
@@ -112,8 +113,10 @@ def _fscodec():
 
     return fsencode
 
+
 fsencode = _fscodec()
 del _fscodec
+
 
 class ExifTool(object):
     """Run the `exiftool` command-line tool and communicate to it.

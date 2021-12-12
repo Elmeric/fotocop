@@ -5,7 +5,7 @@ import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.models.timeline import SelectionState
-from .tlv import MIN_BAR_HEIGHT, MAX_BAR_HEIGHT
+from . import tlv
 
 if TYPE_CHECKING:
     from fotocop.models.timeline import Timeline, TimelineNode
@@ -29,7 +29,7 @@ class TimelineScene(QtWidgets.QGraphicsScene):
 
         self.setItemIndexMethod(QtWidgets.QGraphicsScene.NoIndex)
 
-        self.setSceneRect(QtCore.QRectF(0, 0, 100, MAX_BAR_HEIGHT))
+        self.setSceneRect(QtCore.QRectF(0, 0, 100, tlv.MAX_BAR_HEIGHT))
 
     @QtCore.pyqtSlot(set, set, set)
     def onSelectionChanged(
@@ -48,7 +48,7 @@ class TimelineScene(QtWidgets.QGraphicsScene):
     def clearSelection(self):
         if self.timeline is not None:
             self.timeline.selectionModel().clearSelection()
-        print(f"Selected time ranges: {self.timeline.selectionModel().selectedRanges()}")
+        # print(f"Selected time ranges: {self.timeline.selectionModel().selectedRanges()}")
 
     def clear(self):
         self._nodes = dict()
@@ -103,7 +103,7 @@ class YearScene(TimelineScene):
             for month in year:
                 nodeM = LeafNode(self, month, nodeY)
                 self._nodes[month.date] = nodeM
-                nodeM.position = (offsetM, MAX_BAR_HEIGHT - nodeM.geometry.height)
+                nodeM.position = (offsetM, tlv.MAX_BAR_HEIGHT - nodeM.geometry.height)
                 offsetM += nodeM.geometry.barWidth
 
             nodeY.position = (offsetY, 0)
@@ -115,7 +115,7 @@ class YearScene(TimelineScene):
 
         # Update the scene rect and its reference point.
         bounding = self.itemsBoundingRect()
-        self.setSceneRect(0, 0, bounding.width(), MAX_BAR_HEIGHT)
+        self.setSceneRect(0, 0, bounding.width(), tlv.MAX_BAR_HEIGHT)
 
 
 class MonthScene(TimelineScene):
@@ -134,7 +134,7 @@ class MonthScene(TimelineScene):
                 for day in month:
                     nodeD = LeafNode(self, day, nodeM)
                     self._nodes[day.date] = nodeD
-                    nodeD.position = (offsetD, MAX_BAR_HEIGHT - nodeD.geometry.height)
+                    nodeD.position = (offsetD, tlv.MAX_BAR_HEIGHT - nodeD.geometry.height)
                     offsetD += nodeD.geometry.barWidth
 
                 nodeM.position = (offsetM, 0)
@@ -146,7 +146,7 @@ class MonthScene(TimelineScene):
 
         # Update the scene rect and its reference point.
         bounding = self.itemsBoundingRect()
-        self.setSceneRect(0, 0, bounding.width(), MAX_BAR_HEIGHT)
+        self.setSceneRect(0, 0, bounding.width(), tlv.MAX_BAR_HEIGHT)
 
 
 class DayScene(TimelineScene):
@@ -166,7 +166,7 @@ class DayScene(TimelineScene):
                     for hour in day:
                         nodeH = LeafNode(self, hour, nodeD)
                         self._nodes[hour.date] = nodeH
-                        nodeH.position = (offsetH, MAX_BAR_HEIGHT - nodeH.geometry.height)
+                        nodeH.position = (offsetH, tlv.MAX_BAR_HEIGHT - nodeH.geometry.height)
                         offsetH += nodeH.geometry.barWidth
 
                     nodeD.position = (offsetD, 0)
@@ -178,7 +178,7 @@ class DayScene(TimelineScene):
 
         # Update the scene rect and its reference point.
         bounding = self.itemsBoundingRect()
-        self.setSceneRect(0, 0, bounding.width(), MAX_BAR_HEIGHT)
+        self.setSceneRect(0, 0, bounding.width(), tlv.MAX_BAR_HEIGHT)
 
 
 class Node:
@@ -323,7 +323,7 @@ class NodeGeometry:
     def __init__(self, node: "Node"):
         super().__init__()
         self.width = 100
-        self.height = MAX_BAR_HEIGHT
+        self.height = tlv.MAX_BAR_HEIGHT
         self.barWidth = 15
         self.spacing = 5
         self.hovered = False
@@ -361,7 +361,7 @@ class BranchNodeGeometry(NodeGeometry):
     def recalculateSize(self):
         timelineNode = self._node.timelineNode
         self.width = self.captionHeight + timelineNode.childCount() * self.barWidth
-        self.height = MAX_BAR_HEIGHT
+        self.height = tlv.MAX_BAR_HEIGHT
 
 
 class LeafNodeGeometry(NodeGeometry):
@@ -369,11 +369,11 @@ class LeafNodeGeometry(NodeGeometry):
         timelineNode = self._node.timelineNode
         rootNode = timelineNode.root
         weightScale = (
-            (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT)
+            (tlv.MAX_BAR_HEIGHT - tlv.MIN_BAR_HEIGHT)
             / rootNode.maxWeightByDepth[timelineNode.depth - 1]
         )
         self.width = self.barWidth
-        self.height = MIN_BAR_HEIGHT + timelineNode.weight * weightScale
+        self.height = tlv.MIN_BAR_HEIGHT + timelineNode.weight * weightScale
 
 
 class NodeGraphicsObject(QtWidgets.QGraphicsObject):
@@ -430,7 +430,6 @@ class BranchNodeGraphicsObject(NodeGraphicsObject):
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget: QtWidgets.QWidget = None,
     ):
-        # print(f"Painting {self.node.timelineNode.date}")
         node = self.node
         geometry = node.geometry
         geometry.recalculateSize()
@@ -530,7 +529,6 @@ class LeafNodeGraphicsObject(NodeGraphicsObject):
         option: QtWidgets.QStyleOptionGraphicsItem,
         widget: QtWidgets.QWidget = None,
     ):
-        # print(f"Painting {self.node.timelineNode.date}")
         node = self.node
         geometry = node.geometry
         geometry.recalculateSize()

@@ -140,6 +140,8 @@ class TimelineNodeSelection():
     def selectedRanges(self) -> List[TimeRange]:
         selectedRanges = list()
         for item in self.selected.values():
+            if item.is_root:
+                continue
             selectedRanges = self._mergeToRanges(item.timeRange, selectedRanges)
         return selectedRanges
 

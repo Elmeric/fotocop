@@ -30,22 +30,27 @@ class _LogServer(mp.Process):
         logging_date_format = '%Y-%m-%d %H:%M:%S'
         # file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(name)s %(filename)s %(lineno)d: %(message)s'
         file_logging_format = '%(asctime)s.%(msecs)03d %(levelname)-8s %(processName)-15s %(threadName)-20s %(message)s'
+        consoleLogLevel = logging.WARNING
 
         root = logging.getLogger()
-        filehandler = logging.FileHandler(self.logFile, mode='w')
-        filehandler.setLevel(self.logLevel)
-        filehandler.setFormatter(logging.Formatter(file_logging_format, logging_date_format))
-        # filehandler.setFormatter(logging.Formatter(file_logging_format))
-        root.addHandler(filehandler)
+        try:
+            filehandler = logging.FileHandler(self.logFile, mode='w')
+        except OSError:
+            consoleLogLevel = self.logLevel
+        else:
+            filehandler.setLevel(self.logLevel)
+            filehandler.setFormatter(logging.Formatter(file_logging_format, logging_date_format))
+            # filehandler.setFormatter(logging.Formatter(file_logging_format))
+            root.addHandler(filehandler)
+        finally:
+            if self.logOnConsolde:
+                consolehandler = logging.StreamHandler()
+                consolehandler.set_name('console')
+                consolehandler.setFormatter(logging.Formatter(logging_format))
+                consolehandler.setLevel(consoleLogLevel)
+                root.addHandler(consolehandler)
 
-        if self.logOnConsolde:
-            consolehandler = logging.StreamHandler()
-            consolehandler.set_name('console')
-            consolehandler.setFormatter(logging.Formatter(logging_format))
-            consolehandler.setLevel(logging.WARNING)
-            root.addHandler(consolehandler)
-
-        root.setLevel(logging.DEBUG)
+            root.setLevel(logging.DEBUG)
 
     def run(self):
         self.configure()

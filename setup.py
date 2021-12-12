@@ -5,7 +5,7 @@ setup(
     packages=find_packages(),
     entry_points={
         'console_scripts': [
-            'dcfsBuilder = dcfs_builder.__main__.py:run_main',
+            'fotocop = fotocop.__main__.py:run_main',
         ],
     }
 )

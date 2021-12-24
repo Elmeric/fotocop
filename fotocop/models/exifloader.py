@@ -224,7 +224,7 @@ class ExifLoader(Process):
             dateTime = ('1970', '01', '01', '00', '00', '00')
         self.publishDateTime(dateTime, path)
 
-    def publishDateTime(self, datetime: tuple, imageKey: str):
+    def publishDateTime(self, datetime: Tuple[str, str, str, str, str, str], imageKey: str):
         data = (f"datetime", datetime, imageKey)
         try:
             self.conn.send(data)

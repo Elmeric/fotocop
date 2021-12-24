@@ -1,8 +1,9 @@
 import logging
 
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, NamedTuple
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
+from datetime import datetime
 from pathlib import Path
 from multiprocessing import Pipe, Event
 from threading import Thread
@@ -111,7 +112,7 @@ class Selection:
             logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
             SourceManager().imagesBatchLoaded.emit(newImages)
 
-    def receiveDatetime(self, imageKey: str, datetime_):
+    def receiveDatetime(self, imageKey: str, datetime_: Tuple[str, str, str, str, str, str]):
         try:
             image = self.images[imageKey]
         except KeyError:
@@ -124,7 +125,8 @@ class Selection:
             receivedExifCount += 1
             logger.debug(f"Received datetime for image {imageKey} "
                          f"({receivedExifCount}/{imagesCount})")
-            image.datetime = datetime_
+            image.datetime = Datation(*datetime_)
+            # image.datetime = datetime_
             image.loadingInProgress = False
             self.timeline.addDatetime(datetime_)
             sourceManager.backgroundActionProgressChanged.emit(receivedExifCount)
@@ -150,14 +152,28 @@ class Selection:
             SourceManager().thumbnailLoaded.emit(imageKey)
 
 
+class Datation(NamedTuple):
+    year: str
+    month: str
+    day: str
+    hour: str
+    minute: str
+    second: str
+
+    def asDatetime(self) -> datetime:
+        return datetime(*[int(s) for s in self])
+
+
 @dataclass()
 class Image:
     name: str
     path: str
 
     def __post_init__(self):
+        self.extension = Path(self.name).suffix
         self._isSelected: bool = True
-        self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
+        self._datetime: Optional[Datation] = None
+        # self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
         self.session = ""
         self.loadingInProgress = False
 
@@ -178,7 +194,8 @@ class Image:
             SourceManager().selection.selectedImagesCount += sel
 
     @property
-    def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:
+    def datetime(self) -> Optional[Datation]:
+    # def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:
         if self._datetime is None:
             if not self.loadingInProgress:
                 logger.debug(f"Datetime cache missed for image: {self.name}")

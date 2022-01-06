@@ -5,6 +5,7 @@ import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.models.naming import ORIGINAL_CASE, UPPERCASE, LOWERCASE
+from .nameseditor import ImageNamingTemplateEditor
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Image
@@ -143,18 +144,18 @@ class RenameWidget(QFramedWidget):
         self.setAutoFillBackground(True)
         # self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
 
-        self.renameCmb = QtWidgets.QComboBox()
+        self.templateCmb = QtWidgets.QComboBox()
         self.extensionCmb = QtWidgets.QComboBox()
         self.exampleLbl = QtWidgets.QLabel("Example")
 
         layout = QtWidgets.QFormLayout()
         self.setLayout(layout)
 
-        layout.addRow('Preset:', self.renameCmb)
+        layout.addRow('Preset:', self.templateCmb)
         layout.addRow('Extension:', self.extensionCmb)
         layout.addRow('Example:', self.exampleLbl)
 
-        self.renameCmb.currentIndexChanged.connect(self.selectTemplate)
+        self.templateCmb.currentIndexChanged.connect(self.selectTemplate)
         self.extensionCmb.currentIndexChanged.connect(self.selectExtension)
 
         self.extensionCmb.addItem(ORIGINAL_CASE, ORIGINAL_CASE)
@@ -162,22 +163,39 @@ class RenameWidget(QFramedWidget):
         self.extensionCmb.addItem(LOWERCASE, LOWERCASE)
         self.extensionCmb.setCurrentIndex(2)    # lowercase
 
-        builtins = self.templates.listBuiltinImageNamingTemplates()
-        for template in builtins:
-            self.renameCmb.addItem(template.name, template.key)
-        self.renameCmb.insertSeparator(len(builtins))
-        customs = self.templates.listImageNamingTemplates()
-        for template in customs:
-            self.renameCmb.addItem(template.name, template.key)
-        self.renameCmb.addItem(EDIT_TEMPLATE, EDIT_TEMPLATE)
+        self.updateTemplateCmb()
+
+    def updateTemplateCmb(self):
+        with QtCore.QSignalBlocker(self.templateCmb):
+            self.templateCmb.clear()
+            builtins = self.templates.listBuiltinImageNamingTemplates()
+            for template in builtins:
+                self.templateCmb.addItem(template.name, template.key)
+            self.templateCmb.insertSeparator(len(builtins))
+            customs = self.templates.listImageNamingTemplates()
+            for template in customs:
+                self.templateCmb.addItem(template.name, template.key)
+            self.templateCmb.addItem(EDIT_TEMPLATE, EDIT_TEMPLATE)
 
     @QtCore.pyqtSlot(int)
     def selectTemplate(self, _index: int):
-        template = self.renameCmb.currentData()
+        template = self.templateCmb.currentData()
+
         if template == EDIT_TEMPLATE:
             print(EDIT_TEMPLATE)
-            return
-        self.templateSelected.emit(template)
+            dialog = ImageNamingTemplateEditor(self.templates, parent=self)
+
+            templateName = ''
+            if dialog.exec():
+                templateName = dialog.templateName
+
+            # Regardless of whether the user clicked OK or cancel, refresh the rename
+            # combo box entries.
+            if templateName:
+                self.updateTemplateCmb()
+                self.templateCmb.setCurrentText(templateName)
+        else:
+            self.templateSelected.emit(template)
 
     @QtCore.pyqtSlot(int)
     def selectExtension(self, _index: int):

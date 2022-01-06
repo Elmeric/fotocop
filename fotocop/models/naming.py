@@ -1,9 +1,10 @@
 import json
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, NamedTuple, Union
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 
+from fotocop.util.basicpatterns import visitable
 from fotocop.models import settings as Config
 from fotocop.models.sources import Datation, Image
 
@@ -15,6 +16,7 @@ LOWERCASE = "lowercase"
 
 class TokenKind(Enum):
     DATE = auto()
+    FILENAME = auto()
     SEQUENCE = auto()
     SESSION = auto()
     FREETEXT = auto()
@@ -37,6 +39,12 @@ class DateToken(Token):
 
 
 @dataclass()
+class FilenameToken(Token):
+    def format(self, image: Image, _seq: int) -> str:
+        return f"{image.name:{self.formatSpec}}"
+
+
+@dataclass()
 class FreeTextToken(Token):
     def format(self, _image: Image, _seq: int) -> str:
         return self.name
@@ -54,9 +62,175 @@ class SessionToken(Token):
         return image.session
 
 
+DATE_TIME_TOKENS = (
+    DateToken("DATE", "YYYYMMDD", "%Y%m%d"),
+    DateToken("TIME", "HHMMSS", "%H%M%S"),
+    DateToken("YEAR_4", "YYYY", "%Y"),
+    DateToken("YEAR_2", "YY", "%y"),
+    DateToken("MONTH", "Month", "%B"),
+    DateToken("MONTH_2", "MM", "%m"),
+    DateToken("DAY_2", "DD", "%d"),
+    DateToken("DAY", "Weekday", "%j"),
+    DateToken("HOUR", "HH", "%H"),
+    DateToken("MINUTE", "MM", "%M"),
+    DateToken("SECOND", "SS", "%S"),
+)
+FILENAME_TOKENS = (
+    FilenameToken("NAME_ORIGINAL", "Original Case", "%ff"),
+    FilenameToken("NAME_UPPER", "UPPERCASE", "%F"),
+    FilenameToken("NAME_LOWER", "lowercase", "%f"),
+)
+IMAGE_NUMBER_TOKENS = (
+    FilenameToken("NUMBER_ALL", "All digits", "%NN"),
+    FilenameToken("NUMBER_1", "One digits", "%N1"),
+    FilenameToken("NUMBER_2", "Two digits", "%N2"),
+    FilenameToken("NUMBER_3", "Three digits", "%N3"),
+    FilenameToken("NUMBER_4", "Four digits", "%N4"),
+)
+SEQUENCE_TOKENS = (
+    SequenceToken("SEQ_1", "One digit", "01"),
+    SequenceToken("SEQ_2", "Two digits", "02"),
+    SequenceToken("SEQ_3", "Three digits", "03"),
+    SequenceToken("SEQ_4", "Four digits", "04"),
+    SequenceToken("SEQ_5", "Five digits", "05"),
+    SequenceToken("SEQ_6", "Six digits", "06"),
+)
+SESSION_TOKENS = (
+    SessionToken("SESSION", "Session", None),
+)
+
+
+class DateTokens(NamedTuple):
+    imageDate = ("Image date", DATE_TIME_TOKENS)
+    today = ("Today", DATE_TIME_TOKENS)
+    yesterday = ("Yesterday", DATE_TIME_TOKENS)
+    downloadTime = ("Download time", DATE_TIME_TOKENS)
+
+
+class FilenameTokens(NamedTuple):
+    name = (
+        "Name",
+        (
+            FilenameToken("NAME_ORIGINAL", "Original Case", "%ff"),
+            FilenameToken("NAME_UPPER", "UPPERCASE", "%F"),
+            FilenameToken("NAME_LOWER", "lowercase", "%f"),
+        )
+    )
+    imageNumber = (
+        "Image number",
+        (
+            FilenameToken("NUMBER_ALL", "All digits", "%NN"),
+            FilenameToken("NUMBER_1", "1 digits", "%N1"),
+            FilenameToken("NUMBER_2", "2 digits", "%N2"),
+            FilenameToken("NUMBER_3", "3 digits", "%N3"),
+            FilenameToken("NUMBER_4", "4 digits", "%N4"),
+        )
+    )
+
+
+class SequenceTokens(NamedTuple):
+    downloadToday = ("Download today", SEQUENCE_TOKENS)
+    storedNumber = ("Stored number", SEQUENCE_TOKENS)
+    sessionNumber = ("Session number", SEQUENCE_TOKENS)
+    sequenceLetter = ("Sequence letter", SEQUENCE_TOKENS)
+
+
+class TokensRoot(NamedTuple):
+    date = ("Date time", DateTokens())
+    filename = ("Filename", FilenameTokens())
+    sequence = ("Sequences", SequenceTokens())
+    session = (
+        "Session",
+        SessionToken("SESSION", "Session", None)
+    )
+
+
+@visitable
+@dataclass()
+class TokenNode:
+    title: str
+    parent: Optional["TokenNode"] = None
+    children: Tuple["TokenNode", ...] = tuple()
+    _tokens: Tuple[Token, ...] = tuple()
+
+    @property
+    def isLeaf(self) -> bool:
+        return len(self.children) == 0
+
+    @property
+    def tokens(self) -> Tuple[Token]:
+        if not self.isLeaf:
+            return tuple()
+        return self._tokens
+
+    @tokens.setter
+    def tokens(self, value: Tuple[Token, ...]):
+        self._tokens = value
+
+
+@dataclass()
+class TokenTree(TokenNode):
+    pass
+
+
+IMAGE_DATE_NODE = TokenNode("Image date")
+IMAGE_DATE_NODE.tokens = DATE_TIME_TOKENS
+TODAY_NODE = TokenNode("Today")
+TODAY_NODE.tokens = DATE_TIME_TOKENS
+YESTERDAY_NODE = TokenNode("Yesterday")
+YESTERDAY_NODE.tokens = DATE_TIME_TOKENS
+DOWNLOAD_TIME_NODE = TokenNode("Download time")
+DOWNLOAD_TIME_NODE.tokens = DATE_TIME_TOKENS
+
+DATE_TIME_NODE = TokenNode("Date time")
+DATE_TIME_NODE.children = (IMAGE_DATE_NODE, TODAY_NODE, YESTERDAY_NODE, DOWNLOAD_TIME_NODE)
+IMAGE_DATE_NODE.parent = DATE_TIME_NODE
+TODAY_NODE.parent = DATE_TIME_NODE
+YESTERDAY_NODE.parent = DATE_TIME_NODE
+DOWNLOAD_TIME_NODE.parent = DATE_TIME_NODE
+
+NAME_NODE = TokenNode("Name")
+NAME_NODE.tokens = FILENAME_TOKENS
+IMAGE_NUMBER_NODE = TokenNode("Image number")
+IMAGE_NUMBER_NODE.tokens = IMAGE_NUMBER_TOKENS
+
+FILENAME_NODE = TokenNode("Filename")
+FILENAME_NODE.children = (NAME_NODE, IMAGE_NUMBER_NODE)
+NAME_NODE.parent = FILENAME_NODE
+IMAGE_NUMBER_NODE.parent = FILENAME_NODE
+
+DOWNLOAD_TODAY_NODE = TokenNode("Downloads today")
+DOWNLOAD_TODAY_NODE.tokens = SEQUENCE_TOKENS
+STORED_NUMBER_NODE = TokenNode("Stored number")
+STORED_NUMBER_NODE.tokens = SEQUENCE_TOKENS
+SESSION_NUMBER_NODE = TokenNode("Session number")
+SESSION_NUMBER_NODE.tokens = SEQUENCE_TOKENS
+SEQUENCE_LETTER_NODE = TokenNode("Sequence letter")
+SEQUENCE_LETTER_NODE.tokens = SEQUENCE_TOKENS
+
+SEQUENCES_NODE = TokenNode("Sequences")
+SEQUENCES_NODE.children = (
+    DOWNLOAD_TODAY_NODE, STORED_NUMBER_NODE, SESSION_NUMBER_NODE, SEQUENCE_LETTER_NODE
+)
+DOWNLOAD_TODAY_NODE.parent = SEQUENCES_NODE
+STORED_NUMBER_NODE.parent = SEQUENCES_NODE
+SESSION_NUMBER_NODE.parent = SEQUENCES_NODE
+SEQUENCE_LETTER_NODE.parent = SEQUENCES_NODE
+
+SESSION_NODE = TokenNode("Session")
+SESSION_NODE.tokens = SESSION_TOKENS
+
+ROOT_TOKENS_NODE = TokenTree("Tokens")
+# ROOT_TOKENS_NODE = TokenNode("Tokens")
+ROOT_TOKENS_NODE.children = (DATE_TIME_NODE, FILENAME_NODE, SEQUENCES_NODE, SESSION_NODE)
+DATE_TIME_NODE.parent = ROOT_TOKENS_NODE
+FILENAME_NODE.parent = ROOT_TOKENS_NODE
+SEQUENCES_NODE.parent = ROOT_TOKENS_NODE
+SESSION_NODE.parent = ROOT_TOKENS_NODE
+
+
 class BuiltinTokens:
-    kind = (TokenKind.DATE, TokenKind.SEQUENCE, TokenKind.SESSION)
-    # kind = ("Date", "Sequence", "Session")
+    kind = (TokenKind.DATE, TokenKind.FILENAME, TokenKind.SEQUENCE, TokenKind.SESSION)
     date = {
         "DATE": DateToken("DATE", "Date (YYYYMMDD)", "%Y%m%d"),
         "TIME": DateToken("TIME", "Time (HHMMSS)", "%H%M%S"),
@@ -68,7 +242,12 @@ class BuiltinTokens:
         "DAY": DateToken("DAY", "Date (Day)", "%j"),
         "HOUR": DateToken("HOUR", "Hour (HH)", "%H"),
         "MINUTE": DateToken("MINUTE", "Minute (MM)", "%M"),
-        "SECOND":DateToken("SECOND", "Second (SS)", "%S"),
+        "SECOND": DateToken("SECOND", "Second (SS)", "%S"),
+    }
+    filename = {
+        "NAME": FilenameToken("NAME", "Name (Original Case)", "%s"),
+        "NUMBER_ALL": FilenameToken("NUMBER_ALL", "Image number (All digits)", "04"),
+        "NUMBER_4": FilenameToken("NUMBER_4", "Image number (4 digits)", "04"),
     }
     sequence = {
         "SEQ_1": SequenceToken("SEQ_1", "Sequence (1 digit)", "01"),
@@ -81,7 +260,7 @@ class BuiltinTokens:
     }
 
     @staticmethod
-    def listBuiltinTokensByKind(kind: TokenKind) -> Tuple[Token,...]:
+    def listBuiltinTokensByKind(kind: TokenKind) -> Tuple[Token, ...]:
         return tuple(getattr(BuiltinTokens, kind.name.lower()).values())
 
 
@@ -95,14 +274,14 @@ class NamingTemplate:
         self.extension = LOWERCASE
 
     def format(self, image: Image, seq: int) -> str:
-        name = ''.join(token.format(image, seq) for token in self.template)
+        name = "".join(token.format(image, seq) for token in self.template)
         if self.extension == LOWERCASE:
             extension = image.extension.lower()
         elif self.extension == UPPERCASE:
             extension = image.extension.upper()
         else:
             extension = image.extension
-        return ''.join((name, extension))
+        return "".join((name, extension))
 
 
 def namingTemplateHook(obj):
@@ -145,6 +324,7 @@ class NamingTemplateEncoder(json.JSONEncoder):
     The NamingTemplate object is encoded into a string using its as_posix() method or into
     an empty string if the path name is not defined.
     """
+
     def default(self, obj):
         """Overrides the JSONEncoder default encoding method.
 
@@ -177,8 +357,8 @@ class NamingTemplateEncoder(json.JSONEncoder):
 
 
 class NamingTemplatesError(Exception):
-    """Exception raised on naming templates saving error.
-    """
+    """Exception raised on naming templates saving error."""
+
     pass
 
 
@@ -245,7 +425,7 @@ class NamingTemplates:
             "destination": self.destination,
         }
         try:
-            with self._templatesFile.open(mode='w') as fh:
+            with self._templatesFile.open(mode="w") as fh:
                 json.dump(templates, fh, indent=4, cls=NamingTemplateEncoder)
         except (OSError, TypeError) as e:
             raise NamingTemplatesError(e)
@@ -297,14 +477,14 @@ class DestinationNameGenerator(ImageNameGenerator):
 # https://stackoverflow.com/questions/57570026/how-to-provide-custom-formatting-from-format-string
 # https://tobywf.com/2015/12/custom-formatters/
 # https://docs.python.org/3.7/library/string.html#custom-string-formatting
-if __name__ == '__main__':
+if __name__ == "__main__":
     for attr in ("date", "sequence", "session"):
         for t in getattr(BuiltinTokens, attr).values():
             print(f"{attr}: {t.name}")
     images = list()
     for i in range(10):
         image = Image(f"img_test_{i:02}", "path")
-        image.datetime = Datation("2021", str((i % 3) + 1), "6", str(i+1), "8", "9")
+        image.datetime = Datation("2021", str((i % 3) + 1), "6", str(i + 1), "8", "9")
         image.session = "Great session"
         images.append(image)
     image = images[0]
@@ -326,34 +506,34 @@ if __name__ == '__main__':
     #     tokenFactory.create("SEQUENCE", "SEQ_4", "Sequence (4 digits)", "04"),
     #     tokenFactory.create("SESSION", "SESSION", "Session", None),
     # )
-    print("*"*10)
+    print("*" * 10)
     seq = 0
     for token in namingTemplate:
         seq += 1
         print(f"{token.name}: {token.format(image, seq)}")
 
-    print("*"*10)
+    print("*" * 10)
     namingTemplate = (
         BuiltinTokens.date["DATE"],
         FreeTextToken("FREE_TEXT", "-", None),
         BuiltinTokens.date["TIME"],
     )
-    name = ''.join(token.format(image, seq) for token in namingTemplate)
+    name = "".join(token.format(image, seq) for token in namingTemplate)
     print(name)
 
-    print("*"*10)
+    print("*" * 10)
     namingTemplates = NamingTemplates()
     for namingTemplate in namingTemplates.destination.values():
-        name = ''.join(token.format(image, seq) for token in namingTemplate.template)
+        name = "".join(token.format(image, seq) for token in namingTemplate.template)
         print(Path(name).as_posix())
 
     for namingTemplate in namingTemplates.image.values():
         name = ImageNameGenerator(namingTemplate).generate(image, seq)
         print(name)
 
-    print("*"*10)
+    print("*" * 10)
     for namingTemplate in NamingTemplates.builtinDestinationNamingTemplates.values():
-        name = ''.join(token.format(image, seq) for token in namingTemplate.template)
+        name = "".join(token.format(image, seq) for token in namingTemplate.template)
         print(Path(name).as_posix())
 
     for namingTemplate in NamingTemplates.builtinImageNamingTemplates.values():
@@ -362,19 +542,21 @@ if __name__ == '__main__':
 
     namingTemplates.save()
 
-    print("*"*10)
-    nameGenerator = ImageNameGenerator(NamingTemplates.builtinImageNamingTemplates["DATE-TIME"])
+    print("*" * 10)
+    nameGenerator = ImageNameGenerator(
+        NamingTemplates.builtinImageNamingTemplates["DATE-TIME"]
+    )
     for image in images:
         print(nameGenerator.generate(image, 0))
 
-    print("*"*10)
+    print("*" * 10)
     nameGenerator = DestinationNameGenerator(
         NamingTemplates.builtinDestinationNamingTemplates["YEAR-MONTH-DAY-SESSION"]
     )
     for image in images:
         print(nameGenerator.generate(image, 0))
 
-    print("*"*10)
+    print("*" * 10)
     namingTemplates.addImageNamingTemplate(
         NamingTemplate(
             "DATE-SESSION",
@@ -395,7 +577,20 @@ if __name__ == '__main__':
     for k in namingTemplates.listDestinationNamingTemplates():
         print(k)
 
-    print("*"*10)
+    print("*" * 10)
     for tokenKind in BuiltinTokens.kind:
         for token in BuiltinTokens.listBuiltinTokensByKind(tokenKind):
             print(tokenKind.name, ": ", token.key, token.name, token.formatSpec)
+
+    print("*" * 10)
+    for nodeL1 in ROOT_TOKENS_NODE.children:
+        print(nodeL1.title)
+        if nodeL1.isLeaf:
+            for token in nodeL1.tokens:
+                print("  ", token.key, token.name, token.formatSpec)
+        else:
+            for nodeL2 in nodeL1.children:
+                print("  ", nodeL2.title)
+                if nodeL2.isLeaf:
+                    for token in nodeL2.tokens:
+                        print("    ", token.key, token.name, token.formatSpec)

@@ -1,8 +1,8 @@
-from typing import TYPE_CHECKING, List, Dict
+from typing import TYPE_CHECKING, List
 from datetime import datetime
 
 from fotocop.util import qtutil as QtUtil
-from fotocop.models.sources import SourceManager, Image, Datation
+from fotocop.models.sources import Image, Datation
 from fotocop.models.naming import (
     NamingTemplates,
     ImageNameGenerator,
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 class Downloader:
 
-    imageSampleChanged = QtUtil.QtSignalAdapter(Image)
+    imageSampleChanged = QtUtil.QtSignalAdapter(str)
 
     def __init__(self):
         self.source = None
@@ -30,7 +30,8 @@ class Downloader:
         self.imageSample = Image("IMG_0001.RAF", "L:/path/to/images")
         self.imageSample.datetime = Datation("2021", "12", "23", "21", "5", "30")
         self.images = {self.imageSample.name: self.imageSample}
-        self.imageSampleChanged.emit(self.imageSample)
+        sampleName = self.renameImage(self.imageSample)
+        self.imageSampleChanged.emit(sampleName)
 
     def setImageNamingTemplate(self, key: str):
         template = self.namingTemplates.getImageNamingTemplate(key)
@@ -47,15 +48,16 @@ class Downloader:
         self.destinationNameGenerator = DestinationNameGenerator(template)
 
     def renameImage(self, image: "Image") -> str:
-        return self.imageNameGenerator.generate(image, seq=1)
+        return self.imageNameGenerator.generate(image, seq=1, downloadTime=datetime.now())
 
     def download(self, images: List["Image"]):
+        downloadTime = datetime.now()
         seq = 0
         for image in images:
             if image.isSelected:
                 seq += 1
-                name = self.imageNameGenerator.generate(image, seq)
-                path = self.destinationNameGenerator.generate(image, seq) / name
+                name = self.imageNameGenerator.generate(image, seq, downloadTime)
+                path = self.destinationNameGenerator.generate(image, seq, downloadTime) / name
                 print(f"{path.as_posix()}")
 
     def setSourceSelection(self, selection: "Selection"):
@@ -73,7 +75,8 @@ class Downloader:
                 str(d.hour), str(d.minute), str(d.second)
             )
             self.images = {self.imageSample.name: self.imageSample}
-        self.imageSampleChanged.emit(self.imageSample)
+        sampleName = self.renameImage(self.imageSample)
+        self.imageSampleChanged.emit(sampleName)
 
     def updateImageSample(self):
         images = self.source.images
@@ -81,4 +84,5 @@ class Downloader:
             imageKey = next(iter(images))
             self.imageSample = images[imageKey]
             self.images = images
-            self.imageSampleChanged.emit(self.imageSample)
+            sampleName = self.renameImage(self.imageSample)
+            self.imageSampleChanged.emit(sampleName)

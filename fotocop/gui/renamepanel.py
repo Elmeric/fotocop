@@ -122,7 +122,7 @@ class QPanelView(QtWidgets.QWidget):
     def minimumSize(self) -> QtCore.QSize:
         print("MinimumSize")
         if self.content is None:
-            font_height = QtGui.QFontMetrics(QtGui.QFont).height()
+            font_height = QtGui.QFontMetrics(QtGui.QFont()).height()
             width = minPanelWidth()
             height = font_height * 2
         else:
@@ -136,9 +136,14 @@ class RenameWidget(QFramedWidget):
     templateSelected = QtCore.pyqtSignal(str)
     extensionSelected = QtCore.pyqtSignal(str)
 
-    def __init__(self, templates: "NamingTemplates", parent=None):
+    def __init__(self, downloader: "Downloader", parent=None):
         super().__init__(parent)
-        self.templates = templates
+
+        self.parent = parent
+        self.downloader = downloader
+        self.templates = downloader.namingTemplates
+
+        self._selectedTemplateKey = ""
 
         self.setBackgroundRole(QtGui.QPalette.Base)
         self.setAutoFillBackground(True)
@@ -164,6 +169,7 @@ class RenameWidget(QFramedWidget):
         self.extensionCmb.setCurrentIndex(2)    # lowercase
 
         self.updateTemplateCmb()
+        self.templateCmb.setCurrentIndex(0)
 
     def updateTemplateCmb(self):
         with QtCore.QSignalBlocker(self.templateCmb):
@@ -176,26 +182,27 @@ class RenameWidget(QFramedWidget):
             for template in customs:
                 self.templateCmb.addItem(template.name, template.key)
             self.templateCmb.addItem(EDIT_TEMPLATE, EDIT_TEMPLATE)
+            self.templateCmb.setCurrentIndex(-1)
 
     @QtCore.pyqtSlot(int)
     def selectTemplate(self, _index: int):
-        template = self.templateCmb.currentData()
+        templateKey = self.templateCmb.currentData()
 
-        if template == EDIT_TEMPLATE:
-            print(EDIT_TEMPLATE)
-            dialog = ImageNamingTemplateEditor(self.templates, parent=self)
+        if templateKey == EDIT_TEMPLATE:
+            dialog = ImageNamingTemplateEditor(self.downloader, parent=self.parent)
+            dialog.editTemplate(self._selectedTemplateKey)
 
-            templateName = ''
+            templateName = self.templateCmb.itemText(0)
             if dialog.exec():
                 templateName = dialog.templateName
 
             # Regardless of whether the user clicked OK or cancel, refresh the rename
             # combo box entries.
-            if templateName:
-                self.updateTemplateCmb()
-                self.templateCmb.setCurrentText(templateName)
+            self.updateTemplateCmb()
+            self.templateCmb.setCurrentText(templateName)
         else:
-            self.templateSelected.emit(template)
+            self._selectedTemplateKey = self.templateCmb.currentData()
+            self.templateSelected.emit(templateKey)
 
     @QtCore.pyqtSlot(int)
     def selectExtension(self, _index: int):
@@ -224,7 +231,7 @@ class RenamePanel(QtWidgets.QScrollArea):
             headerFontColor=QtGui.QColor(QtCore.Qt.white)
         )
         self.photoRenameWidget = RenameWidget(
-            templates= downloader.namingTemplates,
+            downloader=downloader,
             parent=self
         )
         self.photoRenamePanel.addWidget(self.photoRenameWidget)
@@ -243,6 +250,5 @@ class RenamePanel(QtWidgets.QScrollArea):
         self.photoRenameWidget.templateSelected.connect(downloader.setImageNamingTemplate)
         self.photoRenameWidget.extensionSelected.connect(downloader.setExtension)
 
-    def updateImageSample(self, image: "Image"):
-        name = self.downloader.renameImage(image)
+    def updateImageSample(self, name: str):
         self.photoRenameWidget.exampleLbl.setText(name)

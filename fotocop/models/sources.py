@@ -171,6 +171,7 @@ class Image:
 
     def __post_init__(self):
         self.extension = Path(self.name).suffix
+        self.stem = Path(self.name).stem
         self._isSelected: bool = True
         self._datetime: Optional[Datation] = None
         # self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None

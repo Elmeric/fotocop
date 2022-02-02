@@ -33,6 +33,7 @@ from .fittedlineedit import FittedLineEdit
 from .pathselector import PathSelector, DirectorySelector, FileSelector
 from .autocompletetextedit import AutoCompleteTextEdit
 from .collapsiblewidget import CollapsibleWidget
+from .framewidget import QFramedWidget
 
 
 def autoLayoutWithLabel(
@@ -80,7 +81,7 @@ def createAction(
         slot: optional slot to connect on the QAction signal.
         shortcut:optional shortcut of the QAction.
         icon: optional icon of the QAction (maybe a file name or a QIcon).
-        tip: optional tool tip ans status tip of the QAction.
+        tip: optional tool tip and status tip of the QAction.
         checkable: make the QAction checkable if True (False by default).
         signal: the QAction signal to be cnnected with 'slot' ('triggered' by
             default).
@@ -142,7 +143,7 @@ class MyAppStyle(QtWidgets.QProxyStyle):
     """A QProxyStyle specialization to adjust some default style settings.
 
     Increase the default small icon size with 4 pixels.
-    Adjust the the size of the view item decoration (apply to QTreeView and
+    Adjust the size of the view item decoration (apply to QTreeView and
     QTableView).
     """
     def pixelMetric(self, metric, option=None, widget=None) -> int:

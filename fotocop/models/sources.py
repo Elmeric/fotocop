@@ -19,7 +19,7 @@ from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
 
-__all__ = ["SourceType", "DriveType", "Selection", "Image", "SourceManager"]
+__all__ = ["SourceType", "DriveType", "Selection", "Image", "SourceManager", "Datation"]
 
 
 logger = logging.getLogger(__name__)
@@ -196,7 +196,6 @@ class Image:
 
     @property
     def datetime(self) -> Optional[Datation]:
-    # def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:
         if self._datetime is None:
             if not self.loadingInProgress:
                 logger.debug(f"Datetime cache missed for image: {self.name}")
@@ -441,7 +440,6 @@ class SourceManager(metaclass=Singleton):
 
     def getSources(self, enumerateFirst: bool = False) -> Tuple[List[Device], List[LogicalDisk]]:
         if enumerateFirst:
-        # if enumerateFirst or not self.logicalDisks:
             # Enumeration required or sources not yet enumerated: do it! (do not test on
             # self.devices as it may be empty after sources enumeration if no devices
             # are connected).
@@ -511,7 +509,7 @@ class SourceManager(metaclass=Singleton):
             source.eject = state
 
     def scanComplete(self, imagesCount: int, isStopped: bool):
-        # Call by the images scanner listener when the scan process is finished (either
+        # Call by the images' scanner listener when the scan process is finished (either
         # complete or stopped)
         logger.info(f"All batches received: {imagesCount} images - "
                     f"Status: {'stopped' if isStopped else 'complete'}")
@@ -534,7 +532,7 @@ class SourceManager(metaclass=Singleton):
         # Stop and join the exif requestor thread
         self._stopExifRequestor()
 
-        # Stop and join the images scanner process ant its listener thread
+        # Stop and join the images' scanner process ant its listener thread
         logger.info("Request images scanner to stop...")
         self.imageScannerConnection.send((ImageScanner.Command.STOP, 0))
         self.imageScanner.join(timeout=0.25)

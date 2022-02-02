@@ -4,12 +4,11 @@ import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
-from fotocop.models.naming import ORIGINAL_CASE, UPPERCASE, LOWERCASE
+from fotocop.util import qtutil as QtUtil
+from fotocop.models import naming
 from .nameseditor import ImageNamingTemplateEditor
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import Image
-    from fotocop.models.naming import NamingTemplates
     from fotocop.models.downloader import Downloader
 
 EDIT_TEMPLATE = "Custom..."
@@ -20,53 +19,39 @@ ThumbnailBackgroundName = MediumGray
 
 
 def minPanelWidth() -> int:
-    """
-    Minimum width of panels on left and right side of main window.
+    """Minimum width of panels on left and right side of main window.
 
     Derived from standard font size.
 
-    :return: size in pixels
+    Returns: size in pixels.
     """
 
     return int(QtGui.QFontMetrics(QtGui.QFont()).height() * 13.5)
 
 
-class QFramedWidget(QtWidgets.QWidget):
-    """
-    Draw a Frame around the widget in the style of the application.
-
-    Use this instead of using a stylesheet to draw a widget's border.
-    """
-
-    def paintEvent(self, *opts):
-        painter = QtWidgets.QStylePainter(self)
-        option = QtWidgets.QStyleOptionFrame()
-        option.initFrom(self)
-        painter.drawPrimitive(QtWidgets.QStyle.PE_Frame, option)
-        super().paintEvent(*opts)
-
-
 class QPanelView(QtWidgets.QWidget):
-    """
-    A header bar with a child widget.
+    """A header bar with a child widget.
     """
 
-    def __init__(self, label: str,
-                 headerColor: Optional[QtGui.QColor]=None,
-                 headerFontColor: Optional[QtGui.QColor]=None,
-                 parent: QtWidgets.QWidget=None) -> None:
+    def __init__(
+            self,
+            label: str,
+            headerColor: Optional[QtGui.QColor] = None,
+            headerFontColor: Optional[QtGui.QColor] = None,
+            parent: QtWidgets.QWidget = None
+    ):
 
         super().__init__(parent)
 
         self.header = QtWidgets.QWidget(self)
         if headerColor is not None:
-            headerStyle = """QWidget { background-color: %s; }""" % headerColor.name()
+            headerStyle = f"""QWidget {{ background-color: {headerColor.name()}; }}"""
             self.header.setStyleSheet(headerStyle)
         self.header.setSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
 
         self.label = QtWidgets.QLabel(label.upper())
         if headerFontColor is not None:
-            headerFontStyle =  "QLabel {color: %s;}" % headerFontColor.name()
+            headerFontStyle = f"QLabel {{color: {headerFontColor.name()};}}"
             self.label.setStyleSheet(headerFontStyle)
 
         self.headerLayout = QtWidgets.QHBoxLayout()
@@ -75,8 +60,8 @@ class QPanelView(QtWidgets.QWidget):
         self.headerLayout.addStretch()
         self.header.setLayout(self.headerLayout)
 
-        self.headerWidget = None
-        self.content = None
+        self._headerWidget = None
+        self._content = None
 
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -93,10 +78,12 @@ class QPanelView(QtWidgets.QWidget):
             widget: widget to add
         """
 
-        if self.content is not None:
-            self.layout().removeWidget(self.content)
-        self.content = widget
-        self.layout().addWidget(self.content)
+        if self._content is not None:
+            self.layout().removeWidget(self._content)
+
+        self._content = widget
+
+        self.layout().addWidget(self._content)
 
     def addHeaderWidget(self, widget: QtWidgets.QWidget) -> None:
         """Add a widget to the header bar, on the right side.
@@ -106,9 +93,11 @@ class QPanelView(QtWidgets.QWidget):
         Args:
             widget: widget to add
         """
-        if self.headerWidget is not None:
-            self.headerLayout.removeWidget(self.headerWidget)
-        self.headerWidget = widget
+        if self._headerWidget is not None:
+            self.headerLayout.removeWidget(self._headerWidget)
+
+        self._headerWidget = widget
+
         self.headerLayout.addWidget(widget)
 
     def text(self) -> str:
@@ -120,30 +109,28 @@ class QPanelView(QtWidgets.QWidget):
         self.label.setText(text)
 
     def minimumSize(self) -> QtCore.QSize:
-        print("MinimumSize")
-        if self.content is None:
-            font_height = QtGui.QFontMetrics(QtGui.QFont()).height()
+        if self._content is None:
+            fontHeight = QtGui.QFontMetrics(QtGui.QFont()).height()
             width = minPanelWidth()
-            height = font_height * 2
+            height = fontHeight * 2
         else:
-            width = self.content.minimumWidth()
-            height = self.content.minimumHeight()
+            width = self._content.minimumWidth()
+            height = self._content.minimumHeight()
+
         return QtCore.QSize(width, self.header.height() + height)
 
 
-class RenameWidget(QFramedWidget):
+class RenameWidget(QtUtil.QFramedWidget):
 
     templateSelected = QtCore.pyqtSignal(str)
     extensionSelected = QtCore.pyqtSignal(str)
 
-    def __init__(self, downloader: "Downloader", parent=None):
+    def __init__(self, downloader: "Downloader", parent: QtWidgets.QWidget = None):
         super().__init__(parent)
 
-        self.parent = parent
-        self.downloader = downloader
-        self.templates = downloader.namingTemplates
+        self._downloader = downloader
 
-        self._selectedTemplateKey = ""
+        self._selectedTemplateKey = None
 
         self.setBackgroundRole(QtGui.QPalette.Base)
         self.setAutoFillBackground(True)
@@ -154,54 +141,52 @@ class RenameWidget(QFramedWidget):
         self.exampleLbl = QtWidgets.QLabel("Example")
 
         layout = QtWidgets.QFormLayout()
-        self.setLayout(layout)
-
         layout.addRow('Preset:', self.templateCmb)
         layout.addRow('Extension:', self.extensionCmb)
         layout.addRow('Example:', self.exampleLbl)
+        self.setLayout(layout)
 
         self.templateCmb.currentIndexChanged.connect(self.selectTemplate)
         self.extensionCmb.currentIndexChanged.connect(self.selectExtension)
 
-        self.extensionCmb.addItem(ORIGINAL_CASE, ORIGINAL_CASE)
-        self.extensionCmb.addItem(UPPERCASE, UPPERCASE)
-        self.extensionCmb.addItem(LOWERCASE, LOWERCASE)
+        self.extensionCmb.addItem(naming.ORIGINAL_CASE, naming.ORIGINAL_CASE)
+        self.extensionCmb.addItem(naming.UPPERCASE, naming.UPPERCASE)
+        self.extensionCmb.addItem(naming.LOWERCASE, naming.LOWERCASE)
         self.extensionCmb.setCurrentIndex(2)    # lowercase
 
-        self.updateTemplateCmb()
+        # Initialize the template combo box entries and select the first one.
+        self._updateTemplateCmb()
         self.templateCmb.setCurrentIndex(0)
 
-    def updateTemplateCmb(self):
-        with QtCore.QSignalBlocker(self.templateCmb):
-            self.templateCmb.clear()
-            builtins = self.templates.listBuiltinImageNamingTemplates()
-            for template in builtins:
-                self.templateCmb.addItem(template.name, template.key)
-            self.templateCmb.insertSeparator(len(builtins))
-            customs = self.templates.listImageNamingTemplates()
-            for template in customs:
-                self.templateCmb.addItem(template.name, template.key)
-            self.templateCmb.addItem(EDIT_TEMPLATE, EDIT_TEMPLATE)
-            self.templateCmb.setCurrentIndex(-1)
+    @property
+    def sampleName(self) -> str:
+        return self.exampleLbl.text()
+
+    @sampleName.setter
+    def sampleName(self, name: str):
+        self.exampleLbl.setText(name)
 
     @QtCore.pyqtSlot(int)
     def selectTemplate(self, _index: int):
         templateKey = self.templateCmb.currentData()
 
         if templateKey == EDIT_TEMPLATE:
-            dialog = ImageNamingTemplateEditor(self.downloader, parent=self.parent)
+            # The user wants to edit the template's list.
+            dialog = ImageNamingTemplateEditor(self._downloader, parent=self)
             dialog.editTemplate(self._selectedTemplateKey)
 
             templateName = self.templateCmb.itemText(0)
             if dialog.exec():
                 templateName = dialog.templateName
 
-            # Regardless of whether the user clicked OK or cancel, refresh the rename
-            # combo box entries.
-            self.updateTemplateCmb()
+            # Regardless of whether the user clicked OK or cancel, refresh the template
+            # combo box entries and select the bew template if any, the first one otherwise.
+            self._updateTemplateCmb()
             self.templateCmb.setCurrentText(templateName)
+
         else:
-            self._selectedTemplateKey = self.templateCmb.currentData()
+            # The user selected an existing template.
+            self._selectedTemplateKey = templateKey
             self.templateSelected.emit(templateKey)
 
     @QtCore.pyqtSlot(int)
@@ -209,46 +194,64 @@ class RenameWidget(QFramedWidget):
         extensionKind = self.extensionCmb.currentData()
         self.extensionSelected.emit(extensionKind)
 
+    def _updateTemplateCmb(self):
+        downloader = self._downloader
+
+        with QtCore.QSignalBlocker(self.templateCmb):
+            self.templateCmb.clear()
+
+            builtins = downloader.listBuiltinImageNamingTemplates()
+            for template in builtins:
+                self.templateCmb.addItem(template.name, template.key)
+            self.templateCmb.insertSeparator(len(builtins))
+
+            customs = downloader.listCustomImageNamingTemplates()
+            for template in customs:
+                self.templateCmb.addItem(template.name, template.key)
+
+            self.templateCmb.addItem(EDIT_TEMPLATE, EDIT_TEMPLATE)
+
+            self.templateCmb.setCurrentIndex(-1)
+
 
 class RenamePanel(QtWidgets.QScrollArea):
-    """
-    Renaming preferences widget, for photos, videos, and general
-    renaming options.
+    """Panel where image naming template is selected.
+
+    It is a pure graphical UI entity. All its functionalities are handled by its
+    RenameWidget instance.
     """
 
-    def __init__(self, downloader: "Downloader",  parent) -> None:
+    def __init__(self, downloader: "Downloader",  parent: QtWidgets.QWidget) -> None:
         super().__init__(parent)
-
-        self.downloader = downloader
 
         self.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.setWidgetResizable(True)
         self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum)
         # self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
 
-        self.photoRenamePanel = QPanelView(
+        imageRenamePanel = QPanelView(
             label='Photo Renaming', headerColor=QtGui.QColor(ThumbnailBackgroundName),
             headerFontColor=QtGui.QColor(QtCore.Qt.white)
         )
-        self.photoRenameWidget = RenameWidget(
+        self.imageRenameWidget = RenameWidget(
             downloader=downloader,
             parent=self
         )
-        self.photoRenamePanel.addWidget(self.photoRenameWidget)
+        imageRenamePanel.addWidget(self.imageRenameWidget)
 
         # b = QtWidgets.QPushButton("B")
-        # self.photoRenamePanel.addHeaderWidget(b)
+        # imageRenamePanel.addHeaderWidget(b)
 
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        widget.setLayout(layout)
-        layout.addWidget(self.photoRenamePanel)
+        layout.addWidget(imageRenamePanel)
         layout.addStretch()
+        widget.setLayout(layout)
         self.setWidget(widget)
 
-        self.photoRenameWidget.templateSelected.connect(downloader.setImageNamingTemplate)
-        self.photoRenameWidget.extensionSelected.connect(downloader.setExtension)
+        self.imageRenameWidget.templateSelected.connect(downloader.setImageNamingTemplate)
+        self.imageRenameWidget.extensionSelected.connect(downloader.setExtension)
 
     def updateImageSample(self, name: str):
-        self.photoRenameWidget.exampleLbl.setText(name)
+        self.imageRenameWidget.sampleName = name

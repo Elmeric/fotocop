@@ -1,7 +1,7 @@
 import re
 import webbrowser
-from typing import TYPE_CHECKING, Optional, Tuple, List, Dict, NamedTuple
-from enum import  Enum, auto
+from typing import TYPE_CHECKING, Optional, Tuple, List, NamedTuple
+from enum import Enum, auto
 from copy import deepcopy
 
 import PyQt5.QtCore as QtCore
@@ -10,14 +10,11 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Visitor
-from fotocop.models.naming import TOKEN_FAMILIES, TOKEN_GENUS, TOKENS_ROOT_NODE, Token
+from fotocop.models.naming import TokensDescription, Token, NamingTemplates
 
 if TYPE_CHECKING:
-    from fotocop.models.naming import NamingTemplate, TokenNode, TokenTree, TokenFamily, TokenGenus
+    from fotocop.models.naming import TokenTree, TokenFamily, TokenGenus, NamingTemplate
     from fotocop.models.downloader import Downloader
-
-NEW_TEMPLATE = "Save New Custom Preset..."
-DELETE_ALL_TEMPLATES = "Remove All Custom Presets..."
 
 TOKEN_COLORS = {
     "Date time": "#49c222",
@@ -55,60 +52,6 @@ class EditorComboBox(QtWidgets.QComboBox):
         event.ignore()
 
 
-class PrefHighlighter(QtGui.QSyntaxHighlighter):
-    """
-    Highlight non-text preference values in the editor
-    """
-
-    blockHighlighted = QtCore.pyqtSignal()
-
-    def __init__(self, pref_defn_strings: List[str],
-                 pref_color: Dict[str, str],
-                 document: QtGui.QTextDocument) -> None:
-        super().__init__(document)
-
-        # Where detected preference values start and end:
-        # [(start, end), (start, end), ...]
-        # self.boundaries = SortedList()
-
-        pref_defns = ('<{}>'.format(pref) for pref in pref_defn_strings)
-        self.highlightingRules = []
-        for pref in pref_defns:
-            format = QtGui.QTextCharFormat()
-            format.setForeground(QtGui.QBrush(QtGui.QColor(pref_color[pref])))
-            self.highlightingRules.append((pref, format))
-
-    def find_all(self, text: str, pref_defn: str):
-        """
-        Find all occurrences of a preference definition in the text
-        :param text: text to search
-        :param pref_defn: the preference definition
-        :return: yield the position in the document's text
-        """
-        if not len(pref_defn):
-            return  # do not use raise StopIteration as it is Python 3.7 incompatible
-        start = 0
-        while True:
-            start = text.find(pref_defn, start)
-            if start == -1:
-                return  # do not use raise StopIteration as it is Python 3.7 incompatible
-            yield start
-            start += len(pref_defn)
-
-    def highlightBlock(self, text: str) -> None:
-
-        # Recreate the preference value from scratch
-        # self.boundaries = SortedList()
-
-        for expression, format in self.highlightingRules:
-            for index in self.find_all(text, expression):
-                length = len(expression)
-                self.setFormat(index, length, format)
-                # self.boundaries.add((index, index + length - 1))
-
-        self.blockHighlighted.emit()
-
-
 class TemplateTextEdit(QtWidgets.QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -120,19 +63,29 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
         self._heightMin = 0
         self._heightMax = 200
 
-        self.document().documentLayout().documentSizeChanged.connect(self.wrapHeightToContents)
+        self.document().documentLayout().documentSizeChanged.connect(           # noqa
+            self.wrapHeightToContents
+        )
+
+    @property
+    def template(self) -> Tuple[Token, ...]:
+        if self._editedTemplate is not None:
+            return self._editedTemplate.template
+        return tuple()
 
     @QtCore.pyqtSlot()
     def wrapHeightToContents(self):
-        """
-        Adjust the text area size to show contents without vertical scrollbar
+        """Adjust the text area size to show contents without vertical scrollbar.
 
         Derived from:
         http://stackoverflow.com/questions/11851020/a-qwidget-like-qtextedit-that-wraps-its-height-
         automatically-to-its-contents/11858803#11858803
         """
         docHeight = self.document().size().height() + 5
-        if self._heightMin <= docHeight <= self._heightMax and docHeight > self.minimumHeight():
+        if (
+            self._heightMin <= docHeight <= self._heightMax
+            and docHeight > self.minimumHeight()
+        ):
             self.setMinimumHeight(docHeight)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent):
@@ -141,9 +94,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
         if event.button() == QtCore.Qt.LeftButton:
             cursor = self.textCursor()
             position = cursor.position()
-            print(position)
             cursorNeighborhood = self._tokenAtPos(position)
-            print(cursorNeighborhood)
             if cursorNeighborhood.position == CursorPosition.IN:
                 token, index, start, end = cursorNeighborhood.leftToken
                 self._selectedToken = token
@@ -189,6 +140,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
         if cursorNeighborhood.position == CursorPosition.BETWEEN:
             self.viewport().setCursor(QtCore.Qt.IBeamCursor)
         else:
+            assert cursorNeighborhood.position == CursorPosition.IN
             token, _, _, _ = cursorNeighborhood.leftToken
             if token.genusName == "Free text":
                 self.viewport().setCursor(QtCore.Qt.IBeamCursor)
@@ -201,12 +153,6 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
     def mouseDoubleClickEvent(self, e: QtGui.QMouseEvent):
         pass
 
-    # def contextMenuEvent(self, event: QtGui.QContextMenuEvent):
-    #     menu = QtWidgets.QMenu()
-    #     menu.addAction("menu item 1")
-    #     menu.addAction("menu item 2")
-    #     menu.exec(event.globalPos())
-
     def keyPressEvent(self, event: QtGui.QKeyEvent):
         """Automatically select tokens when navigating through the document.
 
@@ -216,7 +162,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
             event: the key press event.
         """
         key = event.key()
-        ctrl = event.modifiers() & QtCore.Qt.ControlModifier    # noqa
+        ctrl = event.modifiers() & QtCore.Qt.ControlModifier  # noqa
 
         if key in (QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return, QtCore.Qt.Key_Tab):
             return
@@ -226,9 +172,14 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
             return
 
         if ctrl and key in (
-            QtCore.Qt.Key_A, QtCore.Qt.Key_C, QtCore.Qt.Key_V,
-            QtCore.Qt.Key_Z, QtCore.Qt.Key_Y, QtCore.Qt.Key_X
+            QtCore.Qt.Key_A,
+            QtCore.Qt.Key_C,
+            QtCore.Qt.Key_V,
+            QtCore.Qt.Key_Z,
+            QtCore.Qt.Key_Y,
+            QtCore.Qt.Key_X,
         ):
+            # TODO: Implement dedicated copy/cut/paste, delete, undo/redo actions
             super().keyPressEvent(event)
             return
 
@@ -258,7 +209,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
                     token, index, start, end = cursorNeighborhood.leftToken
                     newPos = position - len(token.asText())
             if token.name != "":
-                backward = (key == QtCore.Qt.Key_Backspace)
+                backward = key == QtCore.Qt.Key_Backspace
                 if token.genusName == "Free text" and len(token.name) > 1:
                     self._delCarInFreetext(index, position - start, backward)
                     cursor.setPosition(position - 1 if backward else position)
@@ -269,7 +220,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
                     self.setTextCursor(cursor)
             return
 
-        if bool(re.match(r'^[a-zA-Z0-9-_]$', event.text())):
+        if bool(re.match(r"^[a-zA-Z0-9-_]$", event.text())):
             position = cursor.position()
             cursorNeighborhood = self._tokenAtPos(position)
             if cursorNeighborhood.position == CursorPosition.IN:
@@ -284,14 +235,21 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
             else:
                 assert cursorNeighborhood.position == CursorPosition.BETWEEN
                 leftToken, leftIndex, leftStart, leftEnd = cursorNeighborhood.leftToken
-                rightToken, rightIndex, rightStart, rightEnd = cursorNeighborhood.rightToken
+                (
+                    rightToken,
+                    rightIndex,
+                    rightStart,
+                    rightEnd,
+                ) = cursorNeighborhood.rightToken
                 if leftToken.genusName == "Free text":
                     self._updateFreetext(event.text(), leftIndex, position - leftStart)
                     cursor.setPosition(position + 1)
                     self.setTextCursor(cursor)
                     return
                 elif rightToken.genusName == "Free text":
-                    self._updateFreetext(event.text(), rightIndex, position - rightStart)
+                    self._updateFreetext(
+                        event.text(), rightIndex, position - rightStart
+                    )
                     cursor.setPosition(position + 1)
                     self.setTextCursor(cursor)
                     return
@@ -307,19 +265,21 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
         key = event.key()
         cursor = self.textCursor()
         position = cursor.position()
-        print(position)
 
         backward = key in (
-            QtCore.Qt.Key_Left, QtCore.Qt.Key_Home,
-            QtCore.Qt.Key_PageUp, QtCore.Qt.Key_Up
+            QtCore.Qt.Key_Left,
+            QtCore.Qt.Key_Home,
+            QtCore.Qt.Key_PageUp,
+            QtCore.Qt.Key_Up,
         )
         forward = key in (
-            QtCore.Qt.Key_Right, QtCore.Qt.Key_End,
-            QtCore.Qt.Key_PageDown, QtCore.Qt.Key_Down
+            QtCore.Qt.Key_Right,
+            QtCore.Qt.Key_End,
+            QtCore.Qt.Key_PageDown,
+            QtCore.Qt.Key_Down,
         )
         if backward or forward:
             cursorNeighborhood = self._tokenAtPos(position)
-            print(cursorNeighborhood)
             self._selectedToken = None
             if cursorNeighborhood.position == CursorPosition.IN:
                 token, _, one, two = cursorNeighborhood.leftToken
@@ -345,7 +305,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
             return CursorNeighborhood(
                 CursorPosition.BETWEEN,
                 TokenFootprint(Token("", "Free text", None), -1, 0, 0),
-                TokenFootprint(Token("", "Free text", None), -1, 0, 0)
+                TokenFootprint(Token("", "Free text", None), -1, 0, 0),
             )
 
         previousFootprint = TokenFootprint(Token("", "Free text", None), -1, 0, 0)
@@ -355,43 +315,50 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
                 return CursorNeighborhood(
                     CursorPosition.BETWEEN,
                     previousFootprint,
-                    TokenFootprint(template.template[index], index, position, boundary.end)
+                    TokenFootprint(
+                        template.template[index], index, position, boundary.end
+                    ),
                 )
             if boundary.start < position < boundary.end:
                 # In a token
-                footprint = TokenFootprint(template.template[index], index, boundary.start, boundary.end)
+                footprint = TokenFootprint(
+                    template.template[index], index, boundary.start, boundary.end
+                )
                 return CursorNeighborhood(CursorPosition.IN, footprint, footprint)
-            previousFootprint = TokenFootprint(template.template[index], index, boundary.start, boundary.end)
+            previousFootprint = TokenFootprint(
+                template.template[index], index, boundary.start, boundary.end
+            )
         # At end
         return CursorNeighborhood(
             CursorPosition.BETWEEN,
             previousFootprint,
-            TokenFootprint(Token("", "Free text", None), len(template.template), position, position)
+            TokenFootprint(
+                Token("", "Free text", None), len(template.template), position, position
+            ),
         )
 
     def setTemplate(self, template: "NamingTemplate"):
-        print(template.boundaries())
         self._editedTemplate = deepcopy(template)
         self.setPlainText(template.asText())
+        cursor = self.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        self.setTextCursor(cursor)
+        self.setFocus()
 
     def _changeToken(self, action: QtWidgets.QAction, index: int):
-        print(action.text(), index)
-        token = TOKENS_ROOT_NODE.tokensByName[action.text()]
-        print(token)
+        token = NamingTemplates.getToken(action.text())
         tokens = list(self._editedTemplate.template)
         tokens[index] = token
         self._editedTemplate.template = tuple(tokens)
         self.setPlainText(self._editedTemplate.asText())
 
     def _removeToken(self, index: int):
-        print(index)
         tokens = list(self._editedTemplate.template)
         del tokens[index]
         self._editedTemplate.template = tuple(tokens)
         self.setPlainText(self._editedTemplate.asText())
 
     def _updateFreetext(self, text: str, index: int, position: int):
-        print(text, index, position)
         tokens = list(self._editedTemplate.template)
 
         if index < 0:
@@ -405,33 +372,29 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
 
         else:
             # Add a new free text token at the end of the template.
-            token = Token(text, "Free text", None)
             tokens.insert(len(tokens), Token(text, "Free text", None))
 
         self._editedTemplate.template = tuple(tokens)
         self.setPlainText(self._editedTemplate.asText())
 
     def _delCarInFreetext(self, index: int, position: int, backward: bool):
-        print(index, position, backward)
         tokens = list(self._editedTemplate.template)
         token = tokens[index]
         if backward:
-            token.name = token.name[:position - 1] + token.name[position:]
+            token.name = token.name[: position - 1] + token.name[position:]
         else:
             token.name = token.name[:position] + token.name[position + 1:]
         self._editedTemplate.template = tuple(tokens)
         self.setPlainText(self._editedTemplate.asText())
 
     def _insertFreetext(self, text: str, index: int):
-        print(text, index)
         tokens = list(self._editedTemplate.template)
         tokens.insert(index, Token(text, "Free text", None))
         self._editedTemplate.template = tuple(tokens)
         self.setPlainText(self._editedTemplate.asText())
 
     @QtCore.pyqtSlot(Token)
-    def insertToken(self, token: Token):
-        print(token.genusName, token.name, token.formatSpec)
+    def insertToken(self, token: "Token"):
         tokens = list(self._editedTemplate.template)
         cursor = self.textCursor()
         position = cursor.position()
@@ -465,21 +428,22 @@ class TokenHighlighter(QtGui.QSyntaxHighlighter):
     Attributes:
         highlightingRules: a list of HighlightingRule objects.
     """
+
     def __init__(self, document: QtGui.QTextDocument):
         super().__init__(document)
 
         self.highlightingRules = list()
 
-        for family in TOKEN_FAMILIES:
+        for family in TokensDescription.TOKEN_FAMILIES:
             format_ = QtGui.QTextCharFormat()
             format_.setFontWeight(QtGui.QFont.Bold)
             format_.setForeground(QtGui.QColor(TOKEN_COLORS[family]))
-            for genus in TOKEN_GENUS[family]:
+            for genus in TokensDescription.TOKEN_GENUS[family]:
                 pattern = QtCore.QRegularExpression(fr"(\<{genus} \([a-zA-Z0-9 ]+\)\>)")
                 rule = HighlightingRule(pattern, format_)
                 self.highlightingRules.append(rule)
 
-    def highlightBlock(self, text):
+    def highlightBlock(self, text: str):
         """Highlight all text blocks that match one of the highlighting rules' pattern.
 
         The highlightBlock() method is called automatically whenever it is
@@ -493,80 +457,107 @@ class TokenHighlighter(QtGui.QSyntaxHighlighter):
             i = rule.pattern.globalMatch(text)
             while i.hasNext():
                 match = i.next()
-                self.setFormat(match.capturedStart(), match.capturedLength(), rule.format)
+                self.setFormat(
+                    match.capturedStart(), match.capturedLength(), rule.format
+                )
+
+
+class NameEditor(QtWidgets.QDialog):
+    """Very simple dialog window that allows user entry of new template name.
+
+    Save button is disabled when the current name entered is already in use or is empty.
+
+    Args:
+        existingCustomNames: List of existing custom template's names.
+    """
+
+    def __init__(self, existingCustomNames: List[str], parent=None):
+        super().__init__(parent)
+
+        self.existingCustomNames = existingCustomNames
+
+        self.setModal(True)
+
+        title = "Save New Custom Template - Fotocop"
+        self.setWindowTitle(title)
+
+        self.nameEdit = QtWidgets.QLineEdit()
+        metrics = QtGui.QFontMetrics(QtGui.QFont())
+        self.nameEdit.setMinimumWidth(metrics.width(title))
+
+        buttonBox = QtWidgets.QDialogButtonBox()
+        buttonBox.addButton(QtWidgets.QDialogButtonBox.Cancel)
+        self.saveButton = buttonBox.addButton(QtWidgets.QDialogButtonBox.Save)
+        self.saveButton.setEnabled(False)
+
+        flayout = QtWidgets.QFormLayout()
+        flayout.addRow("Template Name:", self.nameEdit)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addLayout(flayout)
+        layout.addWidget(buttonBox)
+
+        self.setLayout(layout)
+
+        self.nameEdit.textEdited.connect(self._nameEdited)
+        buttonBox.rejected.connect(self.reject)
+        buttonBox.accepted.connect(self.accept)
+
+    @property
+    def templateName(self) -> str:
+        return self.nameEdit.text()
+
+    @QtCore.pyqtSlot(str)
+    def _nameEdited(self, name: str):
+        enabled = False
+        if len(name) > 0:
+            enabled = name not in self.existingCustomNames
+        self.saveButton.setEnabled(enabled)
 
 
 class NamingTemplateEditor(QtWidgets.QDialog):
-    def __init__(self, fixedSize=True, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-
-        # Prevent resizing the view when required.
-        # if fixedSize:
-        #     self.setWindowFlags(
-        #         QtCore.Qt.Dialog |
-        #         QtCore.Qt.MSWindowsFixedSizeDialogHint
-        #     )
 
         self.setModal(True)
 
         self.buttonBox = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Help,
-            QtCore.Qt.Horizontal, self
+            QtWidgets.QDialogButtonBox.Ok
+            | QtWidgets.QDialogButtonBox.Cancel
+            | QtWidgets.QDialogButtonBox.Help,
+            QtCore.Qt.Horizontal,
+            self,
         )
         self.helpButton = self.buttonBox.button(QtWidgets.QDialogButtonBox.Help)
-        self.helpButton.clicked.connect(self.helpButtonClicked)
-        self.helpButton.setToolTip('Get help online...')
+        self.helpButton.setToolTip("Get help online...")
 
+        self.helpButton.clicked.connect(self._helpButtonClicked)
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
 
-    def helpButtonClicked(self) -> None:
-        location = '#rename'
-        # location = '#subfoldergeneration'
-        webbrowser.open_new_tab("http://www.damonlynch.net/rapid/documentation/{}".format(location))
-
-    @property
-    def record(self):
-        return tuple()
-
-    def reset(self):
-        self.setEditMode(False)
-
-    def setEditMode(self, editMode: bool):
-        if editMode:
-            self.setWindowTitle('Edit entry')
-            self.addBtn.hide()
-            self.prevBtn.show()
-            self.nextBtn.show()
-        else:
-            self.setWindowTitle('Add entry')
-            self.addBtn.show()
-            self.prevBtn.hide()
-            self.nextBtn.hide()
-
-    def enableButtons(self, isValid: bool):
-        self.buttonBox.button(QtWidgets.QDialogButtonBox.Ok).setEnabled(isValid)
-
-    def setCompleterModel(self, _words):
-        pass
+    @staticmethod
+    def _helpButtonClicked() -> None:
+        location = "#rename"
+        webbrowser.open_new_tab(
+            "http://www.elmeric.fr/fotocop/documentation/{}".format(location)
+        )
 
 
 class ImageNamingTemplateEditor(NamingTemplateEditor):
     def __init__(self, downloader: "Downloader", parent=None):
-    # def __init__(self, parent=None):
         super().__init__(parent=parent)
 
-        self.downloader = downloader
-        # self.downloader = parent.downloader
+        self._downloader = downloader
 
-        self._templates = downloader.namingTemplates
-        # self._templates: Optional["NamingTemplates"] = None
-        # self._editedTemplate: Optional["NamingTemplate"] = None
+        self._existingTemplateNames = list()
 
-        templateLbl = QtWidgets.QLabel('Preset:')
+        templateLbl = QtWidgets.QLabel("Preset:")
         self.templateCmb = QtWidgets.QComboBox()
         exampleLbl = QtWidgets.QLabel("Example:")
         self.example = QtWidgets.QLabel()
+        self.deleteBtn = QtWidgets.QPushButton("Delete")
+        self.replaceChk = QtWidgets.QCheckBox("Replace existing template")
+        self.saveBtn = QtWidgets.QPushButton("Save As")
         self.templateTextEdit = TemplateTextEdit()
         sizePolicy = QtWidgets.QSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum
@@ -577,9 +568,14 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         glayout = QtWidgets.QGridLayout()
         glayout.addWidget(templateLbl, 0, 0)
         glayout.addWidget(self.templateCmb, 0, 1)
+        glayout.addWidget(self.deleteBtn, 0, 2)
         glayout.addWidget(exampleLbl, 1, 0)
-        glayout.addWidget(self.example, 1, 1)
+        glayout.addWidget(self.example, 1, 1, 1, 2)
         glayout.setColumnStretch(1, 1)
+
+        hlayout = QtWidgets.QHBoxLayout()
+        hlayout.addWidget(self.replaceChk)
+        hlayout.addWidget(self.saveBtn)
 
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
@@ -587,54 +583,87 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         layout.addLayout(glayout)
         layout.addSpacing(int(QtGui.QFontMetrics(QtGui.QFont()).height() / 2))
         layout.addWidget(self.templateTextEdit)
+        layout.addLayout(hlayout)
         # layout.addWidget(self.messageWidget)
 
-        self.tokenSelectorList = TOKENS_ROOT_NODE.accept(TokenSelectorBuilder())
+        self.tokenSelectorList = NamingTemplates.tokensRootNode.accept(
+            TokenSelectorBuilder()
+        )
         layout.addWidget(self.tokenSelectorList)
 
         layout.addWidget(self.buttonBox)
 
         self.tokenSelectorList.tokenSelected.connect(self.templateTextEdit.insertToken)
         self.templateCmb.activated.connect(self._editTemplate)
-        self.templateCmb.currentIndexChanged.connect(self._editTemplate)
-        self.templateCmb.currentTextChanged.connect(self._updateExample)
+        self.deleteBtn.clicked.connect(self._deleteTemplate)
+        self.replaceChk.stateChanged.connect(self._setReplace)
+        self.saveBtn.clicked.connect(self._saveTemplate)
+        self.templateTextEdit.textChanged.connect(self._checkTemplate)
+        self._downloader.imageSampleChanged.connect(self._updateImageSample)
 
         self.show()
-        self.updateTemplates()
+        self._updateTemplates(isInit=True)
 
-        # self.highlighter = QtUtil.PatternHighlighter(QtCore.QRegularExpression(r'(\<\w+\>)'), self.nameText.document())
-        # self.setEditMode(False)
-        # self.enableButtons(self.isValid)
-        # self.nameText.setFocus()
+    @property
+    def templateName(self) -> str:
+        return self.templateCmb.currentText()
 
-    def updateTemplates(self):
-    # def setTemplates(self, templates: "NamingTemplates", selectedName: str):
-        # self._templates = templates
-        templates = self._templates
+    @property
+    def _editedTemplate(self) -> Optional["NamingTemplate"]:
+        """Convenient property to retrieve the template in edition.
+
+        It cannot be None as it was existing to be placed in the template combo box and
+        the template editor is modal.
+
+        Returns:
+            The Namingtemplate object currently selected for edition.
+        """
+        template = self._downloader.getImageNamingTemplateByKey(
+            self.templateCmb.currentData()
+        )
+        assert template is not None
+        return template
+
+    @property
+    def _isDirty(self) -> bool:
+        return self.templateTextEdit.toPlainText() != self._editedTemplate.asText()
+
+    def editTemplate(self, key: str):
+        # Set the template to be edited: retrieve the selected template from its key
+        # and select it to update the dialog state.
+        template = self._downloader.getImageNamingTemplateByKey(key)
+        assert template is not None
+        self._selectTemplate(template)
+
+    def _updateTemplates(self, isInit: bool = False):
+        downloader = self._downloader
 
         with QtCore.QSignalBlocker(self.templateCmb):
             self.templateCmb.clear()
+            self._existingTemplateNames.clear()
 
-            builtins = templates.listBuiltinImageNamingTemplates()
+            builtins = downloader.listBuiltinImageNamingTemplates()
             for template in builtins:
                 self.templateCmb.addItem(template.name, template.key)
+                self._existingTemplateNames.append(template.name)
 
-            self.templateCmb.insertSeparator(len(builtins))
-
-            customs = templates.listImageNamingTemplates()
+            customs = downloader.listCustomImageNamingTemplates()
+            if customs:
+                self.templateCmb.insertSeparator(len(builtins))
             for template in customs:
                 self.templateCmb.addItem(template.name, template.key)
+                self._existingTemplateNames.append(template.name)
 
-            self.templateCmb.addItem(NEW_TEMPLATE, NEW_TEMPLATE)
-            self.templateCmb.addItem(DELETE_ALL_TEMPLATES, DELETE_ALL_TEMPLATES)
+            self.templateCmb.setCurrentIndex(0)
 
-            self.templateCmb.setCurrentIndex(-1)
+        self._setWidgetSizes(isInit)
 
-        self._setWidgetSizes()
+    def _setWidgetSizes(self, isInit: bool):
+        """Resize widgets for enhanced visual layout.
 
-    def _setWidgetSizes(self) -> None:
-        """
-        Resize widgets for enhanced visual layout
+        Args:
+            isInit: False for succesive calls after first init one to avoid adding
+                scrollbar witdh several time.
         """
         # Set the widths of the templates ComboBox to the width of the longest item text.
         width = max(
@@ -644,74 +673,104 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         self.templateCmb.setMinimumWidth(width + 30)
 
         # Set the scroll area to be big enough to eliminate the horizontal scrollbar
-        scrollbar_width = self.style().pixelMetric(QtWidgets.QStyle.PM_ScrollBarExtent)
-        self.tokenSelectorList.setMinimumWidth(self.tokenSelectorList.widget().width() + scrollbar_width)
-
-    def editTemplate(self, key: str):
-        template = self._templates.getImageNamingTemplate(key)
-        self.templateCmb.setCurrentText(template.name)
-
-    @QtCore.pyqtSlot(int)
-    def _editTemplate(self, index_: int):
-        key = self.templateCmb.currentData()
-        template = self._templates.getImageNamingTemplate(key)
-        # self._editedTemplate = template
-        self.templateTextEdit.setTemplate(template)
-
-    @QtCore.pyqtSlot(str)
-    def _updateExample(self, _text: str):
-        templateKey = self.templateCmb.currentData()
-
-        if templateKey == NEW_TEMPLATE:
-            print(NEW_TEMPLATE)
-        elif templateKey == DELETE_ALL_TEMPLATES:
-            print(DELETE_ALL_TEMPLATES)
-        else:
-            self.downloader.setImageNamingTemplate(templateKey)
-            name = self.downloader.renameImage(self.downloader.imageSample)
-            self.example.setText(name)
-
-    @property
-    def templateName(self) -> str:
-        return self.templateCmb.currentText()
-
-    @property
-    def record(self) -> Tuple[str, str]:
-        return self.scope, self.name
-
-    @property
-    def isValid(self) -> bool:
-        return self.nameText.isValid()
+        scrollbarWidth = (
+            self.style().pixelMetric(QtWidgets.QStyle.PM_ScrollBarExtent)
+            if isInit
+            else 0
+        )
+        self.tokenSelectorList.setMinimumWidth(
+            self.tokenSelectorList.widget().width() + scrollbarWidth
+        )
 
     @QtCore.pyqtSlot()
-    def checkName(self):
-        self.nameText.forceUpperCase()
-        self.enableButtons(self.isValid)
+    def _checkTemplate(self):
+        self.saveBtn.setEnabled(self._isDirty)
 
-    def setCompleterModel(self, words):
-        self.completer.setModel(QtCore.QStringListModel(words))
+    @QtCore.pyqtSlot(int)
+    def _editTemplate(self, _index: int):
+        # The user selects a template in the combo box: retrieve the selected template
+        # from its key and select it to update the dialog state.
+        key = self.templateCmb.currentData()
+        template = self._downloader.getImageNamingTemplateByKey(key)
+        assert template is not None
+        self._selectTemplate(template)
 
-    def editEntry(self, scope: str, name: str):
-        self.scopeCmb.setCurrentText(scope)
-        self.nameText.setPlainText(name)
+    def _selectTemplate(self, template: "NamingTemplate"):
+        # Select the template in the combo box if not already done.
+        self.templateCmb.setCurrentText(template.name)
 
-        cursor = QtGui.QTextCursor(self.nameText.document())
-        cursor.movePosition(QtGui.QTextCursor.End)
-        self.nameText.setTextCursor(cursor)
+        # Fill the template text edit with it.
+        self.templateTextEdit.setTemplate(template)
 
-        self.setEditMode(True)
-        self.enableButtons(self.isValid)
+        # Enable / check deletion and saving widgets according to the template type.
+        if template.isBuiltin:
+            self.replaceChk.setEnabled(False)
+            self.replaceChk.setChecked(False)
+            self.deleteBtn.setEnabled(False)
+        else:
+            self.replaceChk.setEnabled(True)
+            self.replaceChk.setChecked(True)
+            self.deleteBtn.setEnabled(True)
 
-    def reset(self):
-        self.scopeCmb.setCurrentText(dt.DcfsDataScope.LOCAL.name)
-        self.nameText.clear()
-        self.setEditMode(False)
-        self.enableButtons(self.isValid)
+        # set it as the downloader selected template to allow correct sample name.
+        self._downloader.setImageNamingTemplate(template.key)
+
+    @QtCore.pyqtSlot(int)
+    def _setReplace(self, state: int):
+        if state == QtCore.Qt.Checked:
+            self.saveBtn.setText("Save")
+        else:
+            self.saveBtn.setText("Save As")
+
+    def _updateImageSample(self, name: str):
+        self.example.setText(name)
+
+    @QtCore.pyqtSlot()
+    def _saveTemplate(self):
+        if not self.replaceChk.isChecked():
+            # Save the changed template with a new name (Save As).
+            # Query a name for the new template.
+            dialog = NameEditor(self._existingTemplateNames, self)
+            dialog.nameEdit.setText(self._editedTemplate.name)
+            if dialog.exec_():
+                templateName = dialog.templateName
+                # Command the template creation to the downloader and show command status.
+                template = self._downloader.addCustomImageNamingTemplates(
+                    templateName, self.templateTextEdit.template
+                )
+                success, msg = self._downloader.saveCustomNamingTemplates()
+                QtUtil.getMainWindow().showStatusMessage(msg, not success)
+                # Update content of the template combo box.
+                self._updateTemplates()
+                # Select the new template to update dialog state.
+                self._selectTemplate(template)
+        else:
+            # Command the template modification to the downloader and show command status.
+            self._downloader.changeCustomImageNamingTemplate(
+                self.templateCmb.currentData(), self.templateTextEdit.template
+            )
+            success, msg = self._downloader.saveCustomNamingTemplates()
+            QtUtil.getMainWindow().showStatusMessage(msg, not success)
+
+    @QtCore.pyqtSlot()
+    def _deleteTemplate(self):
+        # Command the template deletion to the downloader and show command status.
+        self._downloader.deleteCustomImageNamingTemplate(self.templateCmb.currentData())
+        success, msg = self._downloader.saveCustomNamingTemplates()
+        QtUtil.getMainWindow().showStatusMessage(msg, not success)
+        # Update content of the template combo box.
+        self._updateTemplates()
+        # Select the first template in the combo box to update dialog state.
+        firstTemplate = self._downloader.getImageNamingTemplateByKey(
+            self.templateCmb.itemData(0)
+        )
+        assert firstTemplate is not None
+        self._selectTemplate(firstTemplate)
 
 
 class TokenSelectorList(QtWidgets.QScrollArea):
 
-    tokenSelected = QtCore.pyqtSignal(Token)   #
+    tokenSelected = QtCore.pyqtSignal(Token)  #
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -773,13 +832,13 @@ class TokenSelector(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.colorLbl = QtWidgets.QLabel(' ')
+        self.colorLbl = QtWidgets.QLabel(" ")
         size = QtGui.QFontMetrics(QtGui.QFont()).height()
         self.colorLbl.setFixedSize(QtCore.QSize(size, size))
 
         self.tokenCmb = tokenCmb = EditorComboBox()
 
-        insertBtn = QtWidgets.QPushButton('Insert')
+        insertBtn = QtWidgets.QPushButton("Insert")
         insertBtn.setSizePolicy(
             QtWidgets.QSizePolicy(
                 QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed
@@ -794,21 +853,20 @@ class TokenSelector(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
-        tokenCmb.activated.connect(self.selectToken)
-        insertBtn.clicked.connect(self.selectToken)
+        tokenCmb.activated.connect(self._selectToken)
+        insertBtn.clicked.connect(self._selectToken)
 
     def setColor(self, color: str):
-        self.colorLbl.setStyleSheet(f'QLabel {{background-color: {color};}}')
+        self.colorLbl.setStyleSheet(f"QLabel {{background-color: {color};}}")
 
     def insertItem(self, index: int, text: str, userData: "Token"):
         self.tokenCmb.insertItem(index, text, userData)
 
-    def selectToken(self):
+    def _selectToken(self):
         self.tokenSelected.emit(self.tokenCmb.currentData())
 
 
 class TokenSelectorBuilder(Visitor):
-
     def visitTokenTree(self, tokenTree: "TokenTree"):
         tokenListView = TokenSelectorList()
 
@@ -837,5 +895,5 @@ class TokenSelectorBuilder(Visitor):
         return tokenSelector
 
     @staticmethod
-    def visitToken(token: Token) -> Tuple[str, Token]:
+    def visitToken(token: "Token") -> Tuple[str, "Token"]:
         return token.name, token

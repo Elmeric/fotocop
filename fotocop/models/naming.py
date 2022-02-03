@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from fotocop.models.downloader import Sequences
 
 __all__ = [
+    "Case",
     "TokensDescription",
     "TokenTree",
     "TokenFamily",
@@ -25,9 +26,11 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-ORIGINAL_CASE = "Original Case"
-UPPERCASE = "UPPERCASE"
-LOWERCASE = "lowercase"
+
+class Case:
+    ORIGINAL_CASE = "Original Case"
+    UPPERCASE = "UPPERCASE"
+    LOWERCASE = "lowercase"
 
 
 class FormatSpec(NamedTuple):
@@ -241,7 +244,7 @@ class NamingTemplate:
     template: Tuple[Token, ...]
 
     def __post_init__(self):
-        self.extension = LOWERCASE
+        self.extension = Case.LOWERCASE
         self.isBuiltin = True
 
     def asText(self) -> str:
@@ -258,9 +261,9 @@ class NamingTemplate:
 
     def format(self, image: "Image", sequences: "Sequences", downloadTime: datetime) -> str:
         name = "".join(token.format(image, sequences, downloadTime) for token in self.template)
-        if self.extension == LOWERCASE:
+        if self.extension == Case.LOWERCASE:
             extension = image.extension.lower()
-        elif self.extension == UPPERCASE:
+        elif self.extension == Case.UPPERCASE:
             extension = image.extension.upper()
         else:
             extension = image.extension

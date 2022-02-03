@@ -5,7 +5,7 @@ import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
-from fotocop.models import naming
+from fotocop.models.naming import Case
 from .nameseditor import ImageNamingTemplateEditor
 
 if TYPE_CHECKING:
@@ -149,9 +149,10 @@ class RenameWidget(QtUtil.QFramedWidget):
         self.templateCmb.currentIndexChanged.connect(self.selectTemplate)
         self.extensionCmb.currentIndexChanged.connect(self.selectExtension)
 
-        self.extensionCmb.addItem(naming.ORIGINAL_CASE, naming.ORIGINAL_CASE)
-        self.extensionCmb.addItem(naming.UPPERCASE, naming.UPPERCASE)
-        self.extensionCmb.addItem(naming.LOWERCASE, naming.LOWERCASE)
+        self.extensionCmb.addItem(Case.ORIGINAL_CASE, Case.ORIGINAL_CASE)
+        self.extensionCmb.addItem(Case.UPPERCASE, Case.UPPERCASE)
+        self.extensionCmb.addItem(Case.LOWERCASE, Case.LOWERCASE)
+        # self.extensionCmb.addItem(naming.LOWERCASE, naming.LOWERCASE)
         self.extensionCmb.setCurrentIndex(2)    # lowercase
 
         # Initialize the template combo box entries and select the first one.

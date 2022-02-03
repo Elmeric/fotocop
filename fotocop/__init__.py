@@ -33,7 +33,7 @@ def _configureParser(parser: argparse.ArgumentParser):
         '--pattern',
         dest='pattern',
         nargs=1,
-        default='YYYYMMDD-HHMMSS',
+        default='YYYYmmDD-HHMMSS',
         # required=True,
         help='pattern to rename images.')
 

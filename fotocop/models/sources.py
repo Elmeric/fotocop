@@ -1,8 +1,9 @@
 import logging
 
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, NamedTuple
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
+from datetime import datetime
 from pathlib import Path
 from multiprocessing import Pipe, Event
 from threading import Thread
@@ -18,7 +19,7 @@ from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
 
-__all__ = ["SourceType", "DriveType", "Selection", "Image", "SourceManager"]
+__all__ = ["SourceType", "DriveType", "Selection", "Image", "SourceManager", "Datation"]
 
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ class Selection:
             logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
             SourceManager().imagesBatchLoaded.emit(newImages)
 
-    def receiveDatetime(self, imageKey: str, datetime_):
+    def receiveDatetime(self, imageKey: str, datetime_: Tuple[str, str, str, str, str, str]):
         try:
             image = self.images[imageKey]
         except KeyError:
@@ -124,7 +125,8 @@ class Selection:
             receivedExifCount += 1
             logger.debug(f"Received datetime for image {imageKey} "
                          f"({receivedExifCount}/{imagesCount})")
-            image.datetime = datetime_
+            image.datetime = Datation(*datetime_)
+            # image.datetime = datetime_
             image.loadingInProgress = False
             self.timeline.addDatetime(datetime_)
             sourceManager.backgroundActionProgressChanged.emit(receivedExifCount)
@@ -150,14 +152,29 @@ class Selection:
             SourceManager().thumbnailLoaded.emit(imageKey)
 
 
+class Datation(NamedTuple):
+    year: str
+    month: str
+    day: str
+    hour: str
+    minute: str
+    second: str
+
+    def asDatetime(self) -> datetime:
+        return datetime(*[int(s) for s in self])
+
+
 @dataclass()
 class Image:
     name: str
     path: str
 
     def __post_init__(self):
+        self.extension = Path(self.name).suffix
+        self.stem = Path(self.name).stem
         self._isSelected: bool = True
-        self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
+        self._datetime: Optional[Datation] = None
+        # self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
         self.session = ""
         self.loadingInProgress = False
 
@@ -178,7 +195,7 @@ class Image:
             SourceManager().selection.selectedImagesCount += sel
 
     @property
-    def datetime(self) -> Optional[Tuple[str, str, str, str, str, str]]:
+    def datetime(self) -> Optional[Datation]:
         if self._datetime is None:
             if not self.loadingInProgress:
                 logger.debug(f"Datetime cache missed for image: {self.name}")
@@ -423,7 +440,6 @@ class SourceManager(metaclass=Singleton):
 
     def getSources(self, enumerateFirst: bool = False) -> Tuple[List[Device], List[LogicalDisk]]:
         if enumerateFirst:
-        # if enumerateFirst or not self.logicalDisks:
             # Enumeration required or sources not yet enumerated: do it! (do not test on
             # self.devices as it may be empty after sources enumeration if no devices
             # are connected).
@@ -493,7 +509,7 @@ class SourceManager(metaclass=Singleton):
             source.eject = state
 
     def scanComplete(self, imagesCount: int, isStopped: bool):
-        # Call by the images scanner listener when the scan process is finished (either
+        # Call by the images' scanner listener when the scan process is finished (either
         # complete or stopped)
         logger.info(f"All batches received: {imagesCount} images - "
                     f"Status: {'stopped' if isStopped else 'complete'}")
@@ -516,7 +532,7 @@ class SourceManager(metaclass=Singleton):
         # Stop and join the exif requestor thread
         self._stopExifRequestor()
 
-        # Stop and join the images scanner process ant its listener thread
+        # Stop and join the images' scanner process ant its listener thread
         logger.info("Request images scanner to stop...")
         self.imageScannerConnection.send((ImageScanner.Command.STOP, 0))
         self.imageScanner.join(timeout=0.25)

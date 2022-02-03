@@ -15,11 +15,13 @@ from fotocop.util import qtutil as QtUtil
 # Models
 from fotocop.models import settings as Config
 from fotocop.models.sources import SourceManager
+from fotocop.models.downloader import Downloader
 
 # Views
 from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
 from .timelineviewer import TimelineViewer
+from .renamepanel import RenamePanel
 
 __all__ = ["QtMain"]
 
@@ -64,31 +66,37 @@ class QtMainView(QtWidgets.QMainWindow):
         self._sourceManager = sourceManager
         sourceSelector = SourceSelector(sourceManager)
 
-        destSelector = QtUtil.DirectorySelector(
-            label="Destination folder:",
-            placeHolder="Path to the destination folder",
-            selectIcon=selectIcon,
-            tip=f"Select the destination folder. Absolute path or path"
-            f" relative to {Config.fotocopSettings.defaultDirectory}",
-            directoryGetter=lambda: str(Config.fotocopSettings.defaultDirectory),
-            shallExist=True,
-            defaultPath="",
-            parent=self,
-        )
+        # destSelector = QtUtil.DirectorySelector(
+        #     label="Destination folder:",
+        #     placeHolder="Path to the destination folder",
+        #     selectIcon=selectIcon,
+        #     tip=f"Select the destination folder. Absolute path or path"
+        #     f" relative to {Config.fotocopSettings.defaultDirectory}",
+        #     directoryGetter=lambda: str(Config.fotocopSettings.defaultDirectory),
+        #     shallExist=True,
+        #     defaultPath="",
+        #     parent=self,
+        # )
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         thumbnailViewer = ThumbnailViewer()
 
         timelineViewer = TimelineViewer(parent=self)
 
+        downloader = Downloader()
+        renamePanel = RenamePanel(downloader=downloader, parent=self)
+
         self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
         self._sourceManager.sourceSelected.connect(sourceSelector.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(thumbnailViewer.setSourceSelection)
         self._sourceManager.sourceSelected.connect(timelineViewer.setTimeline)
+        self._sourceManager.sourceSelected.connect(downloader.setSourceSelection)
         self._sourceManager.imagesBatchLoaded.connect(thumbnailViewer.addImages)
         self._sourceManager.thumbnailLoaded.connect(thumbnailViewer.updateImage)
         self._sourceManager.datetimeLoaded.connect(timelineViewer.updateTimeline)
         self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
         self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
+        self._sourceManager.timelineBuilt.connect(downloader.updateImageSample)
+        downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
         thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
         timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
         timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)
@@ -97,21 +105,28 @@ class QtMainView(QtWidgets.QMainWindow):
         splash.setProgress(30)
 
         # Build the main view layout.
-        vertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        vertSplitter.setChildrenCollapsible(False)
-        vertSplitter.setHandleWidth(2)
-        vertSplitter.addWidget(thumbnailViewer)
-        vertSplitter.addWidget(timelineViewer)
-        vertSplitter.setStretchFactor(0, 5)
-        vertSplitter.setStretchFactor(1, 1)
-        vertSplitter.setOpaqueResize(False)
+        centerVertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        centerVertSplitter.setChildrenCollapsible(False)
+        centerVertSplitter.setHandleWidth(2)
+        centerVertSplitter.addWidget(thumbnailViewer)
+        centerVertSplitter.addWidget(timelineViewer)
+        centerVertSplitter.setStretchFactor(0, 5)
+        centerVertSplitter.setStretchFactor(1, 1)
+        centerVertSplitter.setOpaqueResize(False)
+
+        rightWidget = QtWidgets.QWidget()
+        rightLayout = QtWidgets.QVBoxLayout()
+        rightLayout.addWidget(renamePanel)
+        # rightLayout.addWidget(destSelector)
+        rightLayout.addStretch()
+        rightWidget.setLayout(rightLayout)
 
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         horzSplitter.setChildrenCollapsible(False)
         horzSplitter.setHandleWidth(2)
         horzSplitter.addWidget(sourceSelector)
-        horzSplitter.addWidget(vertSplitter)
-        horzSplitter.addWidget(destSelector)
+        horzSplitter.addWidget(centerVertSplitter)
+        horzSplitter.addWidget(rightWidget)
         horzSplitter.setStretchFactor(0, 1)
         horzSplitter.setStretchFactor(1, 3)
         horzSplitter.setStretchFactor(2, 1)

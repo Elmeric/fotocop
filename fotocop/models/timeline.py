@@ -192,7 +192,6 @@ class TimelineNodeSelection():
         # s2, s1, e2, e1: return s2, e1
         return [TimeRange(r2.start, r1.end)]
 
-
     def _internalSelect(self, item: "TimelineNode", command: SelectionFlag):
         if command == SelectionFlag.Clear:
             # Deselect all selected items.

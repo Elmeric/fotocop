@@ -66,11 +66,11 @@ class TimelineViewer(QtWidgets.QWidget):
         # Create a view to display the scene corresponding to the current zoom level.
         self._view = TimelineView(parent=self)
 
-        self.setMinimumHeight(tlv.MAX_BAR_HEIGHT + tlv.SCROLL_BAR_HEIGHT)
+        self.setMinimumHeight(tlv.MAX_BAR_HEIGHT + tlv.SCROLL_BAR_HEIGHT + 12)
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self._view)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(5, 5, 5, 5)
 
         self.setLayout(layout)
 

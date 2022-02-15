@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 class Downloader:
 
     imageSampleChanged = QtUtil.QtSignalAdapter(str)
+    destinationSelected = QtUtil.QtSignalAdapter(Path)
+
+    destination: Path
 
     def __init__(self):
         self._namingTemplates = NamingTemplates()
@@ -32,6 +35,10 @@ class Downloader:
         self._imageNamingTemplate = self._namingTemplates.builtinImageNamingTemplates[
             NamingTemplates.defaultImageNamingTemplate
         ]
+
+        # self.selectLastDestination()
+        # self.destination = Path(shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0))
+        # print(self.destination)
         self._destinationNamingTemplate = None
         self._imageSample = self._makeDefaultImageSample()
         self.renameImageSample()
@@ -56,6 +63,11 @@ class Downloader:
     def renameImageSample(self):
         sampleName = self.renameImage(self._imageSample)
         self.imageSampleChanged.emit(sampleName)
+
+    def selectDestination(self, destination: Path) -> None:
+        self.destination = destination
+        Config.fotocopSettings.lastDestination = destination
+        self.destinationSelected.emit(destination)
 
     def makeDestinationFolder(self, image: "Image", downloadTime: datetime = datetime.now()) -> Path:
         return Path(self._destinationNamingTemplate.format(image, self._sequences, downloadTime))
@@ -121,6 +133,13 @@ class Downloader:
             return True, "Custom naming templates successfully saved"
         except NamingTemplatesError as e:
             return False, str(e)
+
+    # def selectLastDestination(self):
+    #     lastDestination = Config.fotocopSettings.lastDestination
+    #     if lastDestination is None:
+    #         lastDestination = shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0)
+    #
+    #     self.selectDestination(Path(lastDestination))
 
 
 @dataclass

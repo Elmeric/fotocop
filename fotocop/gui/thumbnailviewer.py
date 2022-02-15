@@ -350,7 +350,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         proxyModel.setSourceModel(self._imageModel)
         self.thumbnailView.setModel(proxyModel)
 
-        self.toolbar = QtWidgets.QToolBar('Flow chain tools')
+        self.toolbar = QtWidgets.QToolBar('Thumbnails tools')
         interToolsSpacing = 4
 
         selectWidget = QtWidgets.QWidget()
@@ -419,9 +419,12 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.toolbar.addWidget(self.zoomLevelSelector)
 
         hlayout = QtWidgets.QHBoxLayout()
+        hlayout.setContentsMargins(0, 0, 0, 0)
         hlayout.addWidget(self.toolbar)
 
         layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(5, 0, 5, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.thumbnailView)
         layout.addLayout(hlayout)
         self.setLayout(layout)

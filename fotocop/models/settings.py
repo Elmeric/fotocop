@@ -3,6 +3,8 @@
 The FotocopSettings model defines the fotocop application settings and make them
 accessible throughout the application by exposing a fotocopSettings instance.
 """
+from win32com.shell import shell, shellcon  # noqa
+
 from fotocop.util import settings
 
 __all__ = ['fotocopSettings']
@@ -35,7 +37,10 @@ class FotocopSettings(settings.Settings):
     DEFAULT_LOGLEVEL = "INFO"
 
     defaultDirectory = settings.Setting(defaultValue='F:/Users/Images/Mes Photos/Négatifs')
-    lastSource = settings.Setting(defaultValue=None)
+    lastSource = settings.Setting(defaultValue=(None,"UNKNOWN", None, None))
+    lastDestination = settings.Setting(
+        defaultValue=shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0)
+    )
     logLevel = settings.Setting(defaultValue=DEFAULT_LOGLEVEL)
     windowPosition = settings.Setting(defaultValue=(200, 250))
     windowSize = settings.Setting(defaultValue=(640, 480))
@@ -54,7 +59,7 @@ class FotocopSettings(settings.Settings):
             A string with the project path and all its spec items.
         """
         return f'FotocopSettings({self.defaultDirectory}, {self.lastSource},' \
-               f'{self.logLevel}, {self.windowPosition},' \
+               f'{self.lastDestination}, {self.logLevel}, {self.windowPosition},' \
                f'{self.windowSize}, {self.qtScaleFactor})'
 
     def resetToDefaults(self):

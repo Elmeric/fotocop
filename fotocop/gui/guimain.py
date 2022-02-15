@@ -3,6 +3,7 @@
 import sys
 import os
 import logging
+from pathlib import Path
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -18,10 +19,12 @@ from fotocop.models.sources import SourceManager
 from fotocop.models.downloader import Downloader
 
 # Views
+from .fileexplorer import FileSystemModel, FileSystemDelegate, FileSystemFilter
 from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
 from .timelineviewer import TimelineViewer
 from .renamepanel import RenamePanel
+from .destinationpanel import DestinationPanel
 
 __all__ = ["QtMain"]
 
@@ -63,40 +66,46 @@ class QtMainView(QtWidgets.QMainWindow):
         selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
         # Initialize the app's views. Init order fixed to comply with the editors' dependencies.
+        fsModel = FileSystemModel()
+        fsDelegate = FileSystemDelegate()
+        fsFilter = FileSystemFilter()
+        fsFilter.setSourceModel(fsModel)
+        # fsModel = QtWidgets.QFileSystemModel()
+        # fsModel.setRootPath("")
+        # fsModel.setOption(QtWidgets.QFileSystemModel.DontUseCustomDirectoryIcons)
+        # fsModel.setOption(QtWidgets.QFileSystemModel.DontWatchForChanges)
+        # fsModel.setFilter(QtCore.QDir.NoDotAndDotDot | QtCore.QDir.AllDirs)
         self._sourceManager = sourceManager
-        sourceSelector = SourceSelector(sourceManager)
+        sourceSelector = SourceSelector(sourceManager, fsModel, fsFilter, fsDelegate)
 
-        # destSelector = QtUtil.DirectorySelector(
-        #     label="Destination folder:",
-        #     placeHolder="Path to the destination folder",
-        #     selectIcon=selectIcon,
-        #     tip=f"Select the destination folder. Absolute path or path"
-        #     f" relative to {Config.fotocopSettings.defaultDirectory}",
-        #     directoryGetter=lambda: str(Config.fotocopSettings.defaultDirectory),
-        #     shallExist=True,
-        #     defaultPath="",
-        #     parent=self,
-        # )
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         thumbnailViewer = ThumbnailViewer()
 
         timelineViewer = TimelineViewer(parent=self)
 
-        downloader = Downloader()
-        renamePanel = RenamePanel(downloader=downloader, parent=self)
+        self._downloader = Downloader()
+        renamePanel = RenamePanel(downloader=self._downloader, parent=self)
+        destinationPanel = DestinationPanel(
+            downloader=self._downloader,
+            fsModel=fsModel,
+            fsFilter=fsFilter,
+            fsDelegate=fsDelegate,
+            parent=self
+        )
 
         self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
         self._sourceManager.sourceSelected.connect(sourceSelector.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(thumbnailViewer.setSourceSelection)
         self._sourceManager.sourceSelected.connect(timelineViewer.setTimeline)
-        self._sourceManager.sourceSelected.connect(downloader.setSourceSelection)
+        self._sourceManager.sourceSelected.connect(self._downloader.setSourceSelection)
         self._sourceManager.imagesBatchLoaded.connect(thumbnailViewer.addImages)
         self._sourceManager.thumbnailLoaded.connect(thumbnailViewer.updateImage)
         self._sourceManager.datetimeLoaded.connect(timelineViewer.updateTimeline)
         self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
         self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
-        self._sourceManager.timelineBuilt.connect(downloader.updateImageSample)
-        downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
+        self._sourceManager.timelineBuilt.connect(self._downloader.updateImageSample)
+        self._downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
+        self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
         thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
         timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
         timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)
@@ -107,7 +116,7 @@ class QtMainView(QtWidgets.QMainWindow):
         # Build the main view layout.
         centerVertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         centerVertSplitter.setChildrenCollapsible(False)
-        centerVertSplitter.setHandleWidth(2)
+        centerVertSplitter.setHandleWidth(3)
         centerVertSplitter.addWidget(thumbnailViewer)
         centerVertSplitter.addWidget(timelineViewer)
         centerVertSplitter.setStretchFactor(0, 5)
@@ -116,15 +125,22 @@ class QtMainView(QtWidgets.QMainWindow):
 
         rightWidget = QtWidgets.QWidget()
         rightLayout = QtWidgets.QVBoxLayout()
+        rightLayout.setContentsMargins(5, 0, 0, 5)
+        rightLayout.setSpacing(0)
         rightLayout.addWidget(renamePanel)
-        # rightLayout.addWidget(destSelector)
-        rightLayout.addStretch()
+        rightLayout.addWidget(destinationPanel)
         rightWidget.setLayout(rightLayout)
+
+        leftWidget = QtWidgets.QWidget()
+        leftLayout = QtWidgets.QVBoxLayout()
+        leftLayout.setContentsMargins(0, 0, 5, 5)
+        leftLayout.addWidget(sourceSelector)
+        leftWidget.setLayout(leftLayout)
 
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         horzSplitter.setChildrenCollapsible(False)
-        horzSplitter.setHandleWidth(2)
-        horzSplitter.addWidget(sourceSelector)
+        horzSplitter.setHandleWidth(3)
+        horzSplitter.addWidget(leftWidget)
         horzSplitter.addWidget(centerVertSplitter)
         horzSplitter.addWidget(rightWidget)
         horzSplitter.setStretchFactor(0, 1)
@@ -195,6 +211,9 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
+
+        self._sourceManager.selectLastSource(settings.lastSource)
+        self._downloader.selectDestination(Path(settings.lastDestination))
 
         self._splash.setProgress(100)
 

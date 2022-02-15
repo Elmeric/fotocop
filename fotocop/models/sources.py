@@ -19,10 +19,15 @@ from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
 
-__all__ = ["SourceType", "DriveType", "Selection", "Image", "SourceManager", "Datation"]
+__all__ = [
+    "SourceType", "DriveType", "Selection", "Image", "SourceManager", "Datation",
+    "Source", "Device", "LogicalDisk"
+]
 
 
 logger = logging.getLogger(__name__)
+
+Source = Optional[Union["Device", "LogicalDisk"]]
 
 
 class SourceType(Enum):
@@ -73,7 +78,7 @@ class Device:
 
 @dataclass()
 class Selection:
-    source: Optional[Union[Device, LogicalDisk]] = None
+    source: Source = None
     kind: SourceType = SourceType.UNKNOWN
 
     THUMBNAIL_CACHE_SIZE = 10000
@@ -208,7 +213,7 @@ class Image:
         return self._datetime
 
     @datetime.setter
-    def datetime(self, value: Optional[Tuple[str, str, str, str, str, str]]):
+    def datetime(self, value: Optional[Datation]):
         self._datetime = value  # noqa
 
     def getExif(self, command: ExifLoader.Command):
@@ -397,7 +402,7 @@ class SourceManager(metaclass=Singleton):
         self.exifLoaderListener = ExifLoaderListener(exifLoaderConnection)
         self.exifLoaderListener.start()
 
-    def enumerateSources(self, kind: Tuple[DriveType] = None):
+    def enumerateSources(self, kind: Tuple[DriveType] = None, noSignal: bool = False):
         kind = kind or tuple(DriveType)
 
         # https://docs.microsoft.com/fr-fr/windows/win32/wmisdk/wmi-tasks--disks-and-file-systems
@@ -433,19 +438,32 @@ class SourceManager(metaclass=Singleton):
                     )
                     self.devices[name] = Device(name, drive)
 
-        # Re-select the previous source if any
-        self._selectLastSource()
+        if not noSignal:
+            self.sourceEnumerated.emit()
 
-        self.sourceEnumerated.emit()
+        # Re-select the previous source if any
+        # self.selectLastSource(Config.fotocopSettings.lastSource)
 
     def getSources(self, enumerateFirst: bool = False) -> Tuple[List[Device], List[LogicalDisk]]:
         if enumerateFirst:
             # Enumeration required or sources not yet enumerated: do it! (do not test on
             # self.devices as it may be empty after sources enumeration if no devices
             # are connected).
-            self.enumerateSources()
+            self.enumerateSources(noSignal=True)
 
         return list(self.devices.values()), list(self.logicalDisks.values())
+
+    def selectLastSource(self, lastSource: Tuple[str, str, str, bool]):
+        sourceType = SourceType[lastSource[1]]
+
+        if sourceType == SourceType.DEVICE:
+            self.selectDevice(lastSource[0])
+
+        elif sourceType == SourceType.DRIVE:
+            self.selectDrive(lastSource[0], Path(lastSource[2]), lastSource[3])
+
+        else:
+            self.sourceSelected.emit(Selection())
 
     def selectDevice(self, name: str, eject: bool = False):
         # Abort any exif loading or images scanning before changing the selection
@@ -556,26 +574,6 @@ class SourceManager(metaclass=Singleton):
         self.devices.clear()
         self.logicalDisks.clear()
 
-    def _selectLastSource(self):
-        settings = Config.fotocopSettings
-        lastSource = settings.lastSource    # (key, type, path, subDirs)
-        if SourceType[lastSource[1]] == SourceType.DEVICE:
-            try:
-                _device = self.devices[lastSource[0]]
-            except KeyError:
-                pass
-            else:
-                self.selectDevice(lastSource[0])
-        elif SourceType[lastSource[1]] == SourceType.DRIVE:
-            try:
-                _drive = self.logicalDisks[lastSource[0]]
-            except KeyError:
-                pass
-            else:
-                self.selectDrive(lastSource[0], Path(lastSource[2]), lastSource[3])
-        else:
-            pass
-
     def _scanImages(self, path: Path, includeSubDirs: bool = False):
         self.backgroundActionStarted.emit(f"Scanning {path} for images...", 0)
         self.imageScannerConnection.send(
@@ -613,7 +611,7 @@ class SourceManager(metaclass=Singleton):
             logger.info("Exif requestor no more running")
 
     @staticmethod
-    def _addToRecentSources(source: Optional[Union[LogicalDisk, Device]], kind: SourceType):
+    def _addToRecentSources(source: Source, kind: SourceType):
         if source:
             if kind == SourceType.DRIVE:
                 name = source.id

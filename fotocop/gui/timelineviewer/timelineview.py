@@ -30,7 +30,6 @@ class TimelineView(QtWidgets.QGraphicsView):
 
         self.setAlignment(QtCore.Qt.AlignLeft)
         self.setViewportMargins(0, 0, 0, 0)
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
 
         self.setViewportUpdateMode(QtWidgets.QGraphicsView.FullViewportUpdate)
 

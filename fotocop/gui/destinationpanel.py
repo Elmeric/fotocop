@@ -7,11 +7,15 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.models import settings as Config
+from fotocop.models.naming import TemplateType
 from .fileexplorer import FileSystemView
+from .nameseditor import ImageNamingTemplateEditor
 
 if TYPE_CHECKING:
     from fotocop.models.downloader import Downloader
     from fotocop.gui.fileexplorer import FileSystemModel, FileSystemDelegate, FileSystemFilter
+
+EDIT_TEMPLATE = "Custom..."
 
 MediumGray = '#5d5b59'
 
@@ -20,8 +24,7 @@ ThumbnailBackgroundName = MediumGray
 
 class DestinationWidget(QtUtil.QFramedWidget):
 
-    templateSelected = QtCore.pyqtSignal(str)
-    extensionSelected = QtCore.pyqtSignal(str)
+    destBrowser: "FileSystemView"
 
     def __init__(
             self,
@@ -34,14 +37,9 @@ class DestinationWidget(QtUtil.QFramedWidget):
         super().__init__(parent)
 
         self._downloader = downloader
-        self._fsModel = fsModel
-        self._fsFilter = fsFilter
-        self._fsDelegate = fsDelegate
-        self._initCompleted = False
+        self._delayedScrollTo = True
 
         resources = Config.fotocopSettings.resources
-
-        self._selectedTemplateKey = None
 
         self.setBackgroundRole(QtGui.QPalette.Background)
         self.setAutoFillBackground(True)
@@ -49,7 +47,7 @@ class DestinationWidget(QtUtil.QFramedWidget):
 
         self.destinationPix = QtWidgets.QLabel()
         self.destinationPix.setPixmap(
-            QtGui.QPixmap(f"{resources}/image-folder.png").scaledToHeight(
+            QtGui.QPixmap(f"{resources}/blue-image-folder.png").scaledToHeight(
                 48, QtCore.Qt.SmoothTransformation
             )
         )
@@ -79,7 +77,7 @@ class DestinationWidget(QtUtil.QFramedWidget):
 
         presetLayout = QtWidgets.QHBoxLayout()
         presetLayout.setContentsMargins(9, 0, 9, 0)
-        presetLayout.addWidget(QtWidgets.QLabel("Preset:"), 0, QtCore.Qt.AlignCenter)
+        presetLayout.addWidget(QtWidgets.QLabel("Preset:    "), 0, QtCore.Qt.AlignCenter)
         presetLayout.addWidget(self.templateCmb, 0, QtCore.Qt.AlignCenter)
         presetLayout.addStretch()
 
@@ -91,41 +89,39 @@ class DestinationWidget(QtUtil.QFramedWidget):
 
         self.setLayout(layout)
 
-        # self.templateCmb.currentIndexChanged.connect(self.selectTemplate)
-        # self.extensionCmb.currentIndexChanged.connect(self.selectExtension)
+        self.templateCmb.currentIndexChanged.connect(self.selectTemplate)
         self.destBrowser.selectionModel().selectionChanged.connect(self.onFolderSelection)
 
-        # Initialize the template combo box entries and select the first one.
-        # self._updateTemplateCmb()
-        self.templateCmb.setCurrentIndex(0)
+        # Initialize the template combo box entries.
+        self._updateTemplateCmb()
 
     @QtCore.pyqtSlot(Path)
-    def showSelectedDestination(self, path: Path)-> None:
+    def showSelectedDestination(self, path: Path) -> None:
         def scrollTo(p):
             print(p)
-            idx = self._fsModel.index(p)
-            pIdx = self.destBrowser.model().mapFromSource(idx)
-            self.destBrowser.scrollTo(pIdx, QtWidgets.QAbstractItemView.EnsureVisible)
+            dBrowser = self.destBrowser
+            m = destBrowser.model().sourceModel()  # type: FileSystemModel
+            pIdx = dBrowser.model().mapFromSource(m.index(p))
+            dBrowser.scrollTo(pIdx, QtWidgets.QAbstractItemView.EnsureVisible)
 
-        print(f"Show selected destination: {path}{', INIT' if not self._initCompleted else ''}")
+        print(f"Show selected destination: {path}{', INIT' if self._delayedScrollTo else ''}")
         path = path.as_posix()
 
         self.destinationLbl.setText(path)
 
-        proxyIndex = self.destBrowser.model().mapFromSource(self._fsModel.index(path))
-        self.destBrowser.setExpanded(proxyIndex, True)
-        with QtCore.QSignalBlocker(self.destBrowser.selectionModel()):
-            self.destBrowser.setCurrentIndex(proxyIndex)
+        destBrowser = self.destBrowser
+        model = destBrowser.model().sourceModel()   # type: FileSystemModel
+        proxyIndex = destBrowser.model().mapFromSource(model.index(path))
+        destBrowser.setExpanded(proxyIndex, True)
+        with QtCore.QSignalBlocker(destBrowser.selectionModel()):
+            destBrowser.setCurrentIndex(proxyIndex)
         # First scrollTo to force directory loading.
-        self.destBrowser.scrollTo(proxyIndex, QtWidgets.QAbstractItemView.EnsureVisible)
+        destBrowser.scrollTo(proxyIndex, QtWidgets.QAbstractItemView.EnsureVisible)
 
-        if not self._initCompleted:
+        if self._delayedScrollTo:
             # Schedule a second scrollTo, delay adjusted to let the directory being loaded.
-            self._initCompleted = True
-            QtCore.QTimer.singleShot(
-                750,
-                lambda p=path: scrollTo(p)
-            )
+            QtCore.QTimer.singleShot(750, lambda p=path: scrollTo(p))
+            self._delayedScrollTo = False
 
     @QtCore.pyqtSlot(QtCore.QItemSelection, QtCore.QItemSelection)
     def onFolderSelection(
@@ -138,11 +134,53 @@ class DestinationWidget(QtUtil.QFramedWidget):
 
         # Select the new destination
         proxy = self.destBrowser.model()
-        model = proxy.sourceModel()
-        proxyIndex = selected.indexes()[0]
-        index = proxy.mapToSource(proxyIndex)
-        path = model.filePath(index)
-        self._downloader.selectDestination(Path(path))
+        index = proxy.mapToSource(selected.indexes()[0])
+        self._downloader.selectDestination(Path(proxy.sourceModel().filePath(index)))
+
+    @QtCore.pyqtSlot(str)
+    def showDestinationNamingTemplate(self, key: str) -> None:
+        index = self.templateCmb.findData(key, QtCore.Qt.UserRole)
+        if index > 0:
+            with QtCore.QSignalBlocker(self.templateCmb):
+                self.templateCmb.setCurrentIndex(index)
+
+    @QtCore.pyqtSlot(int)
+    def selectTemplate(self, _index: int):
+        currentKey = self._downloader.destinationNamingTemplate.key
+        selectedKey = self.templateCmb.currentData()
+
+        if selectedKey == EDIT_TEMPLATE:
+            # The user wants to edit the template's list.
+            dialog = ImageNamingTemplateEditor(self._downloader, TemplateType.DESTINATION, parent=self)
+            dialog.editTemplate(currentKey)
+
+            if dialog.exec():
+                selectedKey = dialog.templateKey
+            else:
+                selectedKey = currentKey
+
+            # Regardless of whether the user clicked OK or cancel, refresh the template
+            # combo box entries and select the bew template if any, the first one otherwise.
+            self._updateTemplateCmb()
+
+        self._downloader.setNamingTemplate(TemplateType.DESTINATION, selectedKey)
+
+    def _updateTemplateCmb(self):
+        downloader = self._downloader
+
+        with QtCore.QSignalBlocker(self.templateCmb):
+            self.templateCmb.clear()
+
+            builtins = downloader.listBuiltinNamingTemplates(TemplateType.DESTINATION)
+            for template in builtins:
+                self.templateCmb.addItem(template.name, template.key)
+            self.templateCmb.insertSeparator(len(builtins))
+
+            customs = downloader.listCustomNamingTemplates(TemplateType.DESTINATION)
+            for template in customs:
+                self.templateCmb.addItem(template.name, template.key)
+
+            self.templateCmb.addItem(EDIT_TEMPLATE, EDIT_TEMPLATE)
 
 
 class DestinationPanel(QtWidgets.QScrollArea):
@@ -153,6 +191,7 @@ class DestinationPanel(QtWidgets.QScrollArea):
     """
 
     destinationSelected = QtCore.pyqtSignal(Path)
+    destinationNamingTemplateSelected = QtCore.pyqtSignal(str)
 
     def __init__(
             self,
@@ -193,5 +232,4 @@ class DestinationPanel(QtWidgets.QScrollArea):
         self.setWidget(widget)
 
         self.destinationSelected.connect(self.destinationWidget.showSelectedDestination)
-        self.destinationWidget.templateSelected.connect(downloader.setImageNamingTemplate)
-        self.destinationWidget.extensionSelected.connect(downloader.setExtension)
+        self.destinationNamingTemplateSelected.connect(self.destinationWidget.showDestinationNamingTemplate)

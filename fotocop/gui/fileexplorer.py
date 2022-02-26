@@ -37,8 +37,8 @@ class FileSystemModel(QtWidgets.QFileSystemModel):
         self.setRootPath(self.myComputer())
 
         resources = Config.fotocopSettings.resources
-        self.folderIcon = QtUtil.scaledIcon(f"{resources}/folder.png")
-        self.destinationFolderIcon = QtUtil.scaledIcon(f"{resources}/download-folder.png")
+        self.folderIcon = QtUtil.scaledIcon(f"{resources}/blue-folder.png")
+        self.destinationFolderIcon = QtUtil.scaledIcon(f"{resources}/dark-blue-folder.png")
 
         # The next two values are set via FolderPreviewManager.update()
         # They concern provisional folders that will be used if the
@@ -63,7 +63,7 @@ class FileSystemModel(QtWidgets.QFileSystemModel):
     def data(self, index: QtCore.QModelIndex, role=QtCore.Qt.DisplayRole):
         if role == QtCore.Qt.DecorationRole:
             path = index.data(QtWidgets.QFileSystemModel.FilePathRole)  # type: str
-            if path in self.destinationFolders or path in self.downloadedFolders:
+            if path in self.previewFolders or path in self.destinationFolders or path in self.downloadedFolders:
                 return self.destinationFolderIcon
             else:
                 return self.folderIcon

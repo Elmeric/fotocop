@@ -16,7 +16,8 @@ from fotocop.util import qtutil as QtUtil
 # Models
 from fotocop.models import settings as Config
 from fotocop.models.sources import SourceManager
-from fotocop.models.downloader import Downloader
+from fotocop.models.downloader import Downloader, SequencesError
+from fotocop.models.naming import Case, TemplateType
 
 # Views
 from .fileexplorer import FileSystemModel, FileSystemDelegate, FileSystemFilter
@@ -104,8 +105,11 @@ class QtMainView(QtWidgets.QMainWindow):
         self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
         self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
         self._sourceManager.timelineBuilt.connect(self._downloader.updateImageSample)
+        self._downloader.imageNamingTemplateSelected.connect(renamePanel.imageNamingTemplateSelected)
+        self._downloader.imageNamingExtensionSelected.connect(renamePanel.imageNamingExtensionSelected)
         self._downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
         self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
+        self._downloader.destinationNamingTemplateSelected.connect(destinationPanel.destinationNamingTemplateSelected)
         thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
         timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
         timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)
@@ -214,6 +218,9 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self._sourceManager.selectLastSource(settings.lastSource)
         self._downloader.selectDestination(Path(settings.lastDestination))
+        self._downloader.setNamingTemplate(TemplateType.IMAGE, settings.lastImageNamingTemplate)
+        self._downloader.setNamingTemplate(TemplateType.DESTINATION, settings.lastDestinationNamingTemplate)
+        self._downloader.setExtension(Case[settings.lastNamingExtension])
 
         self._splash.setProgress(100)
 
@@ -318,41 +325,54 @@ class QtMainView(QtWidgets.QMainWindow):
         else:
             super().keyPressEvent(e)
 
-    def closeEvent(self, event: QtGui.QCloseEvent):
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """Trap the main window close request to allow saving pending changes.
 
-        If action is confirmed, save the application settings.
+        Save the downloader sequences and the application settings.
 
         Args:
             event: the window close request
         """
-        if self.okToContinue():
-            Config.fotocopSettings.windowPosition = (
-                self.frameGeometry().x(),
-                self.frameGeometry().y(),
+        try:
+            self._downloader.saveSequences()
+        except SequencesError:
+            reply = QtWidgets.QMessageBox.question(
+                self,  # noqa
+                f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
+                f"Cannot save persistent sequences number: quit anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             )
-            Config.fotocopSettings.windowSize = (
-                self.geometry().width(),
-                self.geometry().height(),
-            )
+            if reply == QtWidgets.QMessageBox.No:
+                # reject dialog close event
+                event.ignore()
+                return
 
-            try:
-                Config.fotocopSettings.save()
-            except Config.settings.SettingsError:
-                reply = QtWidgets.QMessageBox.question(
-                    self,  # noqa
-                    f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
-                    f"Cannot save the settings file {Config.fotocopSettings.settingsFile}: quit anyway?",
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                )  # noqa
-                if reply == QtWidgets.QMessageBox.No:
-                    # reject dialog close event
-                    event.ignore()
-            # Saving fotocopSettings OK or reply = QMessageBox.Yes: accept dialog close event
-            else:
-                self._sourceManager.close()
-        else:
-            event.ignore()
+        # Saving downloader sequences OK or reply == QMessageBox.Yes
+        Config.fotocopSettings.windowPosition = (
+            self.frameGeometry().x(),
+            self.frameGeometry().y(),
+        )
+        Config.fotocopSettings.windowSize = (
+            self.geometry().width(),
+            self.geometry().height(),
+        )
+        try:
+            Config.fotocopSettings.save()
+        except Config.settings.SettingsError:
+            reply = QtWidgets.QMessageBox.question(
+                self,  # noqa
+                f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
+                f"Cannot save the settings file {Config.fotocopSettings.settingsFile}: quit anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            )  # noqa
+            if reply == QtWidgets.QMessageBox.No:
+                # reject dialog close event
+                event.ignore()
+                return
+
+        # Saving fotocopSettings OK or reply == QMessageBox.Yes
+        self._sourceManager.close()
+        self._downloader.close()
 
 
 def QtMain():

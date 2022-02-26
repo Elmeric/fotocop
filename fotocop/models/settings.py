@@ -6,6 +6,7 @@ accessible throughout the application by exposing a fotocopSettings instance.
 from win32com.shell import shell, shellcon  # noqa
 
 from fotocop.util import settings
+from fotocop.models import naming
 
 __all__ = ['fotocopSettings']
 
@@ -41,10 +42,17 @@ class FotocopSettings(settings.Settings):
     lastDestination = settings.Setting(
         defaultValue=shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0)
     )
+    lastImageNamingTemplate = settings.Setting(
+        defaultValue=naming.NamingTemplates.defaultImageNamingTemplate
+    )
+    lastDestinationNamingTemplate = settings.Setting(
+        defaultValue=naming.NamingTemplates.defaultDestinationNamingTemplate
+    )
+    lastNamingExtension = settings.Setting(defaultValue=naming.Case.LOWERCASE.name)
     logLevel = settings.Setting(defaultValue=DEFAULT_LOGLEVEL)
-    windowPosition = settings.Setting(defaultValue=(200, 250))
-    windowSize = settings.Setting(defaultValue=(640, 480))
-    qtScaleFactor = settings.Setting(defaultValue='1.1')
+    windowPosition = settings.Setting(defaultValue=(0, 0))
+    windowSize = settings.Setting(defaultValue=(1600, 800))
+    qtScaleFactor = settings.Setting(defaultValue='1.0')
 
     def __init__(self):
         self.appDirs = settings.getAppDirs('fotocop')

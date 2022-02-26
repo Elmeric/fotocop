@@ -6,85 +6,54 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fotocop.util import qtutil as QtUtil
+from fotocop.util.basicpatterns import DelegatedAttribute
 from fotocop.models import settings as Config
 from fotocop.models.sources import Image, Datation
-from fotocop.models.naming import (
-    NamingTemplates,
-    NamingTemplatesError,
-)
+from fotocop.models.naming import (Case, TemplateType, NamingTemplates)
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Selection
-    from fotocop.models.naming import NamingTemplate, Token
+    # from fotocop.models.naming import NamingTemplate, Token
 
 logger = logging.getLogger(__name__)
 
 
 class Downloader:
 
-    imageSampleChanged = QtUtil.QtSignalAdapter(str)
+    imageSampleChanged = QtUtil.QtSignalAdapter(str, str)    # image name, image path
     destinationSelected = QtUtil.QtSignalAdapter(Path)
+    imageNamingTemplateSelected = QtUtil.QtSignalAdapter(str)
+    imageNamingExtensionSelected = QtUtil.QtSignalAdapter(Case)
+    destinationNamingTemplateSelected = QtUtil.QtSignalAdapter(str)
 
-    destination: Path
+    listBuiltinNamingTemplates = DelegatedAttribute("_namingTemplates", "listBuiltins")
+    listCustomNamingTemplates = DelegatedAttribute("_namingTemplates", "listCustoms")
+    getNamingTemplateByKey = DelegatedAttribute("_namingTemplates", "getByKey")
+    getDefaultNamingTemplate = DelegatedAttribute("_namingTemplates", "getDefault")
+    addCustomNamingTemplate = DelegatedAttribute("_namingTemplates", "add")
+    deleteCustomNamingTemplate = DelegatedAttribute("_namingTemplates", "delete")
+    changeCustomNamingTemplate = DelegatedAttribute("_namingTemplates", "change")
+    saveCustomNamingTemplates = DelegatedAttribute("_namingTemplates", "save")
+    saveSequences = DelegatedAttribute("_sequences", "save")
 
     def __init__(self):
-        self._namingTemplates = NamingTemplates()
+        self.destination: Optional[Path] = None
+        namingTemplates = NamingTemplates()
+
+        self.imageNamingTemplate = namingTemplates.getDefault(TemplateType.IMAGE)
+        self.destinationNamingTemplate = namingTemplates.getDefault(TemplateType.DESTINATION)
+
+        self._namingTemplates = namingTemplates
         self._sequences = Sequences()
-
         self._source = None
-        self._imageNamingTemplate = self._namingTemplates.builtinImageNamingTemplates[
-            NamingTemplates.defaultImageNamingTemplate
-        ]
-
-        # self.selectLastDestination()
-        # self.destination = Path(shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0))
-        # print(self.destination)
-        self._destinationNamingTemplate = None
         self._imageSample = self._makeDefaultImageSample()
-        self.renameImageSample()
 
-    def setImageNamingTemplate(self, key: str):
-        template = self.getImageNamingTemplateByKey(key)
-        # Keep previously selected extension unchanged
-        template.extension = self._imageNamingTemplate.extension
-        self._imageNamingTemplate = template
-        self.renameImageSample()
-
-    def setExtension(self, extensionKind: str):
-        self._imageNamingTemplate.extension = extensionKind
-        self.renameImageSample()
-
-    def setDestinationNamingTemplate(self, template: "NamingTemplate"):
-        self._destinationNamingTemplate = template
-
-    def renameImage(self, image: "Image", downloadTime: datetime = datetime.now()) -> str:
-        return self._imageNamingTemplate.format(image, self._sequences, downloadTime)
-
-    def renameImageSample(self):
-        sampleName = self.renameImage(self._imageSample)
-        self.imageSampleChanged.emit(sampleName)
-
-    def selectDestination(self, destination: Path) -> None:
-        self.destination = destination
-        Config.fotocopSettings.lastDestination = destination
-        self.destinationSelected.emit(destination)
-
-    def makeDestinationFolder(self, image: "Image", downloadTime: datetime = datetime.now()) -> Path:
-        return Path(self._destinationNamingTemplate.format(image, self._sequences, downloadTime))
-
-    def download(self, images: List["Image"]):
-        downloadTime = datetime.now()
-        for image in images:
-            if image.isSelected:
-                name = self.renameImage(image, downloadTime)
-                path = self.makeDestinationFolder(image, downloadTime) / name
-                print(f"{path.as_posix()}")
+        self._updateSample()
 
     def setSourceSelection(self, selection: "Selection"):
         """Call on SourceManager.sourceSelected(Selection) signal"""
         self._source = selection
-        self._imageSample = self._makeDefaultImageSample()
-        self.renameImageSample()
+        self.updateImageSample()
 
     def updateImageSample(self):
         """Call on SourceManager.timelineBuilt() signal"""
@@ -96,7 +65,109 @@ class Downloader:
         else:
             # No source or an empty source is selected: create our own image sample.
             self._imageSample = self._makeDefaultImageSample()
-        self.renameImageSample()
+        logger.debug(f"Image sample is now: {self._imageSample.name} "
+                     f"in {self._imageSample.path} "
+                     f"with date {self._imageSample.datetime}")
+        self._updateSample()
+
+    def selectDestination(self, destination: Path) -> None:
+        self.destination = destination
+        Config.fotocopSettings.lastDestination = destination
+        self.destinationSelected.emit(destination)
+
+    def setNamingTemplate(self, kind: "TemplateType", key: str):
+        if kind == TemplateType.IMAGE:
+            self._setImageNamingTemplate(key)
+        else:
+            assert kind == TemplateType.DESTINATION
+            self._setDestinationNamingTemplate(key)
+        self._updateSample()
+
+    def setExtension(self, extensionKind: Case):
+        self.imageNamingTemplate.extension = extensionKind
+        Config.fotocopSettings.lastNamingExtension = extensionKind.name
+        self.imageNamingExtensionSelected.emit(extensionKind)
+        self._updateSample()
+
+    def download(self, images: List["Image"]):
+        downloadTime = datetime.now()
+        for image in images:
+            if image.isSelected:
+                name = self._renameImage(image, downloadTime)
+                path = self._makeDestinationFolder(image, downloadTime) / name
+                print(f"{path.as_posix()}")
+
+    def close(self) -> None:
+        pass
+
+    # def listBuiltinNamingTemplates(self, kind: "TemplateType") -> List["NamingTemplate"]:
+    #     return self._namingTemplates.listBuiltinNamingTemplates(kind)
+        # return list(self._namingTemplates.listBuiltinNamingTemplates(kind))
+
+    # def listCustomNamingTemplates(self, kind: "TemplateType") -> List["NamingTemplate"]:
+    #     return self._namingTemplates.listCustomNamingTemplates(kind)
+        # return list(self._namingTemplates.listCustomNamingTemplates(kind))
+
+    # def getNamingTemplateByKey(self, kind: "TemplateType", key: str) -> Optional["NamingTemplate"]:
+    #     return self._namingTemplates.getNamingTemplateByKey(kind, key)
+
+    # def addCustomNamingTemplates(
+    #         self,
+    #         kind: "TemplateType",
+    #         name: str,
+    #         template: Tuple["Token", ...]
+    # ) -> "NamingTemplate":
+    #     return self._namingTemplates.addCustomNamingTemplate(kind, name, template)
+
+    # def deleteCustomNamingTemplate(self, kind: "TemplateType", templateKey: str):
+    #     self._namingTemplates.deleteCustomNamingTemplate(kind, templateKey)
+
+    # def changeCustomNamingTemplate(
+    #         self,
+    #         kind: "TemplateType",
+    #         templateKey: str,
+    #         template: Tuple["Token", ...]
+    # ) -> "NamingTemplate":
+    #     namingTemplate = self._namingTemplates.changeCustomNamingTemplate(kind, templateKey, template)
+    #     # self._updateSample()
+    #     return namingTemplate
+
+    # def saveCustomNamingTemplates(self) -> Tuple[bool, str]:
+    #     try:
+    #         self._namingTemplates.save()
+    #         return True, "Custom naming templates successfully saved."
+    #     except NamingTemplatesError as e:
+    #         return False, str(e)
+
+    def _setImageNamingTemplate(self, key: str):
+        template = self.getNamingTemplateByKey(TemplateType.IMAGE, key)
+        # Keep previously selected extension unchanged
+        template.extension = self.imageNamingTemplate.extension
+        self.imageNamingTemplate = template
+        Config.fotocopSettings.lastImageNamingTemplate = key
+        self.imageNamingTemplateSelected.emit(key)
+
+    def _setDestinationNamingTemplate(self, key: str):
+        template = self.getNamingTemplateByKey(TemplateType.DESTINATION, key)
+        self.destinationNamingTemplate = template
+        Config.fotocopSettings.lastDestinationNamingTemplate = key
+        self.destinationNamingTemplateSelected.emit(key)
+
+    def _updateSample(self) -> None:
+        imageSample = self._imageSample
+        sampleName = self._renameImage(imageSample)
+        samplePath = self._makeDestinationFolder(imageSample)
+        self.imageSampleChanged.emit(sampleName, samplePath.as_posix())
+
+    def _renameImage(self, image: "Image", downloadTime: datetime = datetime.now()) -> str:
+        return self.imageNamingTemplate.format(image, self._sequences, downloadTime)
+
+    def _makeDestinationFolder(self, image: "Image", downloadTime: datetime = datetime.now()) -> Path:
+        return Path(
+            self.destinationNamingTemplate.format(
+                image, self._sequences, downloadTime, TemplateType.DESTINATION
+            )
+        )
 
     @staticmethod
     def _makeDefaultImageSample() -> "Image":
@@ -107,39 +178,6 @@ class Downloader:
             str(d.hour), str(d.minute), str(d.second)
         )
         return imageSample
-
-    def listBuiltinImageNamingTemplates(self) -> List["NamingTemplate"]:
-        return list(self._namingTemplates.listBuiltinImageNamingTemplates())
-
-    def listCustomImageNamingTemplates(self) -> List["NamingTemplate"]:
-        return list(self._namingTemplates.listCustomImageNamingTemplates())
-
-    def getImageNamingTemplateByKey(self, key: str) -> Optional["NamingTemplate"]:
-        return self._namingTemplates.getImageNamingTemplateByKey(key)
-
-    def addCustomImageNamingTemplates(self, name: str, template: Tuple["Token", ...]) -> "NamingTemplate":
-        return self._namingTemplates.addCustomImageNamingTemplate(name, template)
-
-    def deleteCustomImageNamingTemplate(self, templateKey: str):
-        self._namingTemplates.deleteCustomImageNamingTemplate(templateKey)
-
-    def changeCustomImageNamingTemplate(self, templateKey: str, template: Tuple["Token", ...]):
-        self._namingTemplates.changeCustomImageNamingTemplate(templateKey, template)
-        self.renameImageSample()
-
-    def saveCustomNamingTemplates(self) -> Tuple[bool, str]:
-        try:
-            self._namingTemplates.save()
-            return True, "Custom naming templates successfully saved"
-        except NamingTemplatesError as e:
-            return False, str(e)
-
-    # def selectLastDestination(self):
-    #     lastDestination = Config.fotocopSettings.lastDestination
-    #     if lastDestination is None:
-    #         lastDestination = shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0)
-    #
-    #     self.selectDestination(Path(lastDestination))
 
 
 @dataclass
@@ -183,13 +221,16 @@ class SequencesError(Exception):
 class Sequences:
     def __init__(self):
         self.sessionNumber = 1
+
         self._sequencesFile = Config.fotocopSettings.appDirs.user_config_dir / "sequences.json"
+
         self._downloadsToday = None
         self._storedNumber = None
-        # self._downloadsToday, self._storedNumber = self.load()
+
+        self._isDirty = False
 
     def __str__(self) -> str:
-        return f"Today: {self.downloadsToday}, Stored: {self.storedNumber}," \
+        return f"Today: {self._downloadsToday}, Stored: {self._storedNumber}," \
                f" Session: {self.sessionNumber}, Letters: {self.sequenceLetter}"
 
     @property
@@ -201,7 +242,7 @@ class Sequences:
     @downloadsToday.setter
     def downloadsToday(self, value: int):
         self._downloadsToday.set(value)
-        self.save()
+        self._isDirty = True
 
     @property
     def storedNumber(self) -> int:
@@ -212,7 +253,7 @@ class Sequences:
     @storedNumber.setter
     def storedNumber(self, value: int):
         self._storedNumber = value
-        self.save()
+        self._isDirty = True
 
     @property
     def sequenceLetter(self) -> str:
@@ -232,6 +273,9 @@ class Sequences:
         if self._downloadsToday is None or self._storedNumber is None:
             return
 
+        if not self._isDirty:
+            return
+
         sequences = {
             "downloadsToday": self._downloadsToday.toJson(),
             "storedNumber": self._storedNumber,
@@ -243,12 +287,15 @@ class Sequences:
             msg = f"Cannot save persistent sequences number: {e}"
             logger.warning(msg)
             raise SequencesError(msg)
+        else:
+            logger.info("Downloader sequences correctly saved.")
+            self._isDirty = False
 
     def increment(self):
         self.storedNumber += 1
         self.sessionNumber += 1
         self.downloadsToday.increment()
-        self.save()
+        self._isDirty = True
 
     @staticmethod
     def _divmod26(n: int) -> Tuple[int, int]:
@@ -268,14 +315,14 @@ class Sequences:
         return letters
 
 
-if __name__ == '__main__':
-    seq = Sequences()
-    print(seq)
-    seq.increment()
-    print(seq)
-    seq.downloadsToday = 10
-    seq.storedNumber = 10
-    seq.sessionNumber = 10
-    print(seq)
-    seq.increment()
-    print(seq)
+# if __name__ == '__main__':
+#     seq = Sequences()
+#     print(seq)
+#     seq.increment()
+#     print(seq)
+#     seq.downloadsToday = 10
+#     seq.storedNumber = 10
+#     seq.sessionNumber = 10
+#     print(seq)
+#     seq.increment()
+#     print(seq)

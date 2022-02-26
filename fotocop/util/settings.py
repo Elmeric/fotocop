@@ -13,6 +13,7 @@ It provides:
 import os
 import json
 from pathlib import Path
+from enum import Enum
 from typing import Dict, List, NamedTuple
 
 from fotocop.util.basicpatterns import Singleton

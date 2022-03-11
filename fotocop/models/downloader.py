@@ -1,30 +1,77 @@
 import json
 import logging
-from typing import TYPE_CHECKING, List, Tuple, Optional
+from typing import TYPE_CHECKING, Tuple, Optional
 from datetime import datetime, date
 from dataclasses import dataclass
 from pathlib import Path
+from multiprocessing import Pipe, Event
+from threading import Thread
 
 from fotocop.util import qtutil as QtUtil
-from fotocop.util.basicpatterns import DelegatedAttribute
+from fotocop.util.basicpatterns import Singleton, DelegatedAttribute
 from fotocop.models import settings as Config
 from fotocop.models.sources import Image, Datation
 from fotocop.models.naming import (Case, TemplateType, NamingTemplates)
+from fotocop.models.imagesmover import ImageMover
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Selection
-    # from fotocop.models.naming import NamingTemplate, Token
 
 logger = logging.getLogger(__name__)
 
 
-class Downloader:
+class ImageMoverListener(Thread):
+    def __init__(self, conn):
+        super().__init__()
+        self.name = "ImageMoverListener"
+        self._imageMoverConnection = conn
+        self._alive = Event()
+
+    def run(self):
+        self._alive.set()
+        while self._alive.is_set():
+            try:
+                if self._imageMoverConnection.poll(timeout=0.01):
+                    content, *data = self._imageMoverConnection.recv()
+                    downloader = Downloader()
+
+                    if content == "image_preview":
+                        sampleName, samplePath = data
+                        logger.debug(
+                            f"Received image sample preview: {sampleName}, {samplePath}"
+                        )
+                        downloader.imageSampleChanged.emit(
+                            sampleName,
+                            Path(samplePath).as_posix()
+                        )
+
+                    elif content == "folder_preview":
+                        previewFolders, *_ = data
+                        logger.debug(
+                            f"Received folder preview: {previewFolders}"
+                        )
+                        downloader.folderPreviewChanged.emit(previewFolders)
+
+                    else:
+                        logger.warning(f"Received unknown content: {content}")
+
+            except (OSError, EOFError, BrokenPipeError):
+                self._alive.clear()
+
+    def join(self, timeout=None):
+        self._alive.clear()
+        super().join(timeout)
+
+
+class Downloader(metaclass=Singleton):
 
     imageSampleChanged = QtUtil.QtSignalAdapter(str, str)    # image name, image path
     destinationSelected = QtUtil.QtSignalAdapter(Path)
     imageNamingTemplateSelected = QtUtil.QtSignalAdapter(str)
     imageNamingExtensionSelected = QtUtil.QtSignalAdapter(Case)
     destinationNamingTemplateSelected = QtUtil.QtSignalAdapter(str)
+    sessionRequired = QtUtil.QtSignalAdapter()
+    folderPreviewChanged = QtUtil.QtSignalAdapter(set)
 
     listBuiltinNamingTemplates = DelegatedAttribute("_namingTemplates", "listBuiltins")
     listCustomNamingTemplates = DelegatedAttribute("_namingTemplates", "listCustoms")
@@ -48,96 +95,92 @@ class Downloader:
         self._source = None
         self._imageSample = self._makeDefaultImageSample()
 
-        self._updateSample()
+        # Start the images' mover process and establish a Pipe connection with it
+        logger.info("Starting images mover...")
+        imageMoverConnection, child_conn1 = Pipe()
+        self._imageMoverConnection = imageMoverConnection
+        self._imageMover = ImageMover(child_conn1)
+        self._imageMover.start()
+        child_conn1.close()
+
+        # Start a thread listening to the imageMover process messages
+        self._imagesMoverListener = ImageMoverListener(imageMoverConnection)
+        self._imagesMoverListener.start()
+
+        self._updatePreview(imageOnly=True)
 
     def setSourceSelection(self, selection: "Selection"):
         """Call on SourceManager.sourceSelected(Selection) signal"""
         self._source = selection
-        self.updateImageSample()
+        self._updateImages()
 
     def updateImageSample(self):
-        """Call on SourceManager.timelineBuilt() signal"""
-        images = self._source.images     # may be an empty dict
+        """Call on SourceManager.sourceSelected(Selection) and SourceManager.timelineBuilt() signals"""
+        self._updateImages()
+        images = self._source.images
+        # By SourceManager design, self._source cannot be None, but images may be an
+        # empty dict when the selection is empty.
         if len(images) > 0:
-            # A source with at least one image is selected: get the first one.
+            # A source with at least one image is selected: get the first one if dated.
             imageKey = next(iter(images))
-            self._imageSample = images[imageKey]
+            image = images[imageKey]
+            if image.isLoaded:
+                self._imageSample = images[imageKey]
+            else:
+                # Images are not yet dated: create our own image sample.
+                self._imageSample = self._makeDefaultImageSample()
         else:
             # No source or an empty source is selected: create our own image sample.
             self._imageSample = self._makeDefaultImageSample()
         logger.debug(f"Image sample is now: {self._imageSample.name} "
                      f"in {self._imageSample.path} "
                      f"with date {self._imageSample.datetime}")
-        self._updateSample()
+        self._updatePreview(imageOnly=False)
+        self._checkSession()
 
     def selectDestination(self, destination: Path) -> None:
         self.destination = destination
         Config.fotocopSettings.lastDestination = destination
+        self._imageMoverConnection.send((ImageMover.Command.SET_DEST, destination.as_posix()))
         self.destinationSelected.emit(destination)
 
     def setNamingTemplate(self, kind: "TemplateType", key: str):
         if kind == TemplateType.IMAGE:
             self._setImageNamingTemplate(key)
+            self._updatePreview(imageOnly=True)
         else:
             assert kind == TemplateType.DESTINATION
             self._setDestinationNamingTemplate(key)
-        self._updateSample()
+            self._updatePreview(imageOnly=False)
 
     def setExtension(self, extensionKind: Case):
-        self.imageNamingTemplate.extension = extensionKind
+        template = self.imageNamingTemplate
+        template.extension = extensionKind
         Config.fotocopSettings.lastNamingExtension = extensionKind.name
+        self._imageMoverConnection.send((ImageMover.Command.SET_IMG_TPL, template))
         self.imageNamingExtensionSelected.emit(extensionKind)
-        self._updateSample()
+        self._updatePreview(imageOnly=False)
 
-    def download(self, images: List["Image"]):
+    def download(self) -> None:
+        images = self._source.images
         downloadTime = datetime.now()
-        for image in images:
+        for image in images.values():
             if image.isSelected:
                 name = self._renameImage(image, downloadTime)
                 path = self._makeDestinationFolder(image, downloadTime) / name
-                print(f"{path.as_posix()}")
+                print(f"Moving to: {path.as_posix()}")
 
     def close(self) -> None:
-        pass
+        # Organize a kindly shutdown when quitting the application
 
-    # def listBuiltinNamingTemplates(self, kind: "TemplateType") -> List["NamingTemplate"]:
-    #     return self._namingTemplates.listBuiltinNamingTemplates(kind)
-        # return list(self._namingTemplates.listBuiltinNamingTemplates(kind))
-
-    # def listCustomNamingTemplates(self, kind: "TemplateType") -> List["NamingTemplate"]:
-    #     return self._namingTemplates.listCustomNamingTemplates(kind)
-        # return list(self._namingTemplates.listCustomNamingTemplates(kind))
-
-    # def getNamingTemplateByKey(self, kind: "TemplateType", key: str) -> Optional["NamingTemplate"]:
-    #     return self._namingTemplates.getNamingTemplateByKey(kind, key)
-
-    # def addCustomNamingTemplates(
-    #         self,
-    #         kind: "TemplateType",
-    #         name: str,
-    #         template: Tuple["Token", ...]
-    # ) -> "NamingTemplate":
-    #     return self._namingTemplates.addCustomNamingTemplate(kind, name, template)
-
-    # def deleteCustomNamingTemplate(self, kind: "TemplateType", templateKey: str):
-    #     self._namingTemplates.deleteCustomNamingTemplate(kind, templateKey)
-
-    # def changeCustomNamingTemplate(
-    #         self,
-    #         kind: "TemplateType",
-    #         templateKey: str,
-    #         template: Tuple["Token", ...]
-    # ) -> "NamingTemplate":
-    #     namingTemplate = self._namingTemplates.changeCustomNamingTemplate(kind, templateKey, template)
-    #     # self._updateSample()
-    #     return namingTemplate
-
-    # def saveCustomNamingTemplates(self) -> Tuple[bool, str]:
-    #     try:
-    #         self._namingTemplates.save()
-    #         return True, "Custom naming templates successfully saved."
-    #     except NamingTemplatesError as e:
-    #         return False, str(e)
+        # Stop and join the images' mover process ant its listener thread
+        logger.info("Request images mover to stop...")
+        self._imageMoverConnection.send((ImageMover.Command.STOP, 0))
+        self._imageMover.join(timeout=0.25)
+        if self._imageMover.is_alive():
+            self._imageMover.terminate()
+        self._imageMoverConnection.close()
+        self._imagesMoverListener.join()
 
     def _setImageNamingTemplate(self, key: str):
         template = self.getNamingTemplateByKey(TemplateType.IMAGE, key)
@@ -145,19 +188,38 @@ class Downloader:
         template.extension = self.imageNamingTemplate.extension
         self.imageNamingTemplate = template
         Config.fotocopSettings.lastImageNamingTemplate = key
+        self._imageMoverConnection.send((ImageMover.Command.SET_IMG_TPL, template))
         self.imageNamingTemplateSelected.emit(key)
+        self._checkSession()
 
     def _setDestinationNamingTemplate(self, key: str):
         template = self.getNamingTemplateByKey(TemplateType.DESTINATION, key)
         self.destinationNamingTemplate = template
         Config.fotocopSettings.lastDestinationNamingTemplate = key
+        self._imageMoverConnection.send((ImageMover.Command.SET_DEST_TPL, template))
         self.destinationNamingTemplateSelected.emit(key)
+        self._checkSession()
 
-    def _updateSample(self) -> None:
-        imageSample = self._imageSample
-        sampleName = self._renameImage(imageSample)
-        samplePath = self._makeDestinationFolder(imageSample)
-        self.imageSampleChanged.emit(sampleName, samplePath.as_posix())
+    def _updateImages(self) -> None:
+        images = self._source.images
+        selectedImages = [
+            image
+            for image in images.values()
+            if image.isLoaded and image.isSelected
+        ]
+        self._imageMoverConnection.send((ImageMover.Command.SET_IMAGES, selectedImages))
+
+    def _updatePreview(self, imageOnly: bool = False) -> None:
+        # Update image sample name and path.
+        self._imageMoverConnection.send(
+            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
+        )
+
+        if imageOnly:
+            return
+
+        # Update folders preview
+        self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
 
     def _renameImage(self, image: "Image", downloadTime: datetime = datetime.now()) -> str:
         return self.imageNamingTemplate.format(image, self._sequences, downloadTime)
@@ -178,6 +240,16 @@ class Downloader:
             str(d.hour), str(d.minute), str(d.second)
         )
         return imageSample
+
+    def _checkSession(self):
+        if self.imageNamingTemplate.sessionRequired or self.destinationNamingTemplate.sessionRequired:
+            source = self._source
+            if source is not None and source.images:
+                for image in source.images.values():
+                    if image.isSelected and not image.session:
+                        print("Session required")
+                        self.sessionRequired.emit()
+                        break
 
 
 @dataclass

@@ -179,8 +179,7 @@ class Image:
         self.stem = Path(self.name).stem
         self._isSelected: bool = True
         self._datetime: Optional[Datation] = None
-        # self._datetime: Optional[Tuple[str, str, str, str, str, str]] = None
-        self.session = ""
+        self._session = ""
         self.loadingInProgress = False
 
     @property
@@ -197,7 +196,9 @@ class Image:
         if value != old:
             self._isSelected = value    # noqa
             sel = 1 if value else -1
-            SourceManager().selection.selectedImagesCount += sel
+            sourceManager = SourceManager()
+            sourceManager.selection.selectedImagesCount += sel
+            sourceManager.imagesSelectionChanged.emit()
 
     @property
     def datetime(self) -> Optional[Datation]:
@@ -215,6 +216,17 @@ class Image:
     @datetime.setter
     def datetime(self, value: Optional[Datation]):
         self._datetime = value  # noqa
+
+    @property
+    def session(self) -> str:
+        return self._session
+
+    @session.setter
+    def session(self, value: str) -> None:
+        old = self._session
+        if value != old:
+            self._session = value   # noqa
+            SourceManager().imagesSessionChanged.emit()
 
     def getExif(self, command: ExifLoader.Command):
         SourceManager().exifLoaderConnection.send(
@@ -364,6 +376,8 @@ class SourceManager(metaclass=Singleton):
     imagesBatchLoaded = QtUtil.QtSignalAdapter(dict)        # images
     thumbnailLoaded = QtUtil.QtSignalAdapter(str)           # name
     datetimeLoaded = QtUtil.QtSignalAdapter()
+    imagesSelectionChanged = QtUtil.QtSignalAdapter()
+    imagesSessionChanged = QtUtil.QtSignalAdapter()
     timelineBuilt = QtUtil.QtSignalAdapter()
     backgroundActionStarted = QtUtil.QtSignalAdapter(str, int)      # msg, max value
     backgroundActionProgressChanged = QtUtil.QtSignalAdapter(int)   # progress value

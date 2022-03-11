@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 from pathlib import Path
 
 import PyQt5.QtCore as QtCore
@@ -9,6 +9,7 @@ from fotocop.util import qtutil as QtUtil
 from fotocop.models import settings as Config
 from fotocop.models.naming import TemplateType
 from .fileexplorer import FileSystemView
+from .virtualfsmodel import VirtualFolderTreeView
 from .nameseditor import ImageNamingTemplateEditor
 
 if TYPE_CHECKING:
@@ -64,10 +65,17 @@ class DestinationWidget(QtUtil.QFramedWidget):
         self.destBrowser.setIndentation(10)
         self.destBrowser.setSortingEnabled(False)
         self.destBrowser.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerItem)
-        self.destBrowser.header().hide()
         for i in range(1, fsModel.columnCount()):
             self.destBrowser.hideColumn(i)
         self.destBrowser.collapseAll()
+
+        self.previewer = VirtualFolderTreeView()
+        self.previewBtn = QtWidgets.QPushButton("Preview")
+        self.previewBtn.setCheckable(True)
+
+        self.destStack = QtWidgets.QStackedWidget()
+        self.destStack.addWidget(self.destBrowser)
+        self.destStack.addWidget(self.previewer)
 
         dstLayout = QtWidgets.QHBoxLayout()
         dstLayout.setContentsMargins(9, 0, 9, 0)
@@ -85,15 +93,21 @@ class DestinationWidget(QtUtil.QFramedWidget):
         layout.setContentsMargins(1, 0, 1, 1)
         layout.addLayout(dstLayout)
         layout.addLayout(presetLayout)
-        layout.addWidget(self.destBrowser)
+        layout.addWidget(self.previewBtn)
+        layout.addWidget(self.destStack)
 
         self.setLayout(layout)
 
         self.templateCmb.currentIndexChanged.connect(self.selectTemplate)
         self.destBrowser.selectionModel().selectionChanged.connect(self.onFolderSelection)
+        self.previewBtn.toggled.connect(self.previewToggle)
 
         # Initialize the template combo box entries.
         self._updateTemplateCmb()
+
+    @QtCore.pyqtSlot(bool)
+    def previewToggle(self, checked: bool) -> None:
+        self.destStack.setCurrentIndex(1 if checked else 0)
 
     @QtCore.pyqtSlot(Path)
     def showSelectedDestination(self, path: Path) -> None:
@@ -108,6 +122,8 @@ class DestinationWidget(QtUtil.QFramedWidget):
         path = path.as_posix()
 
         self.destinationLbl.setText(path)
+
+        self.previewer.setRootPath(Path(path))
 
         destBrowser = self.destBrowser
         model = destBrowser.model().sourceModel()   # type: FileSystemModel
@@ -165,6 +181,10 @@ class DestinationWidget(QtUtil.QFramedWidget):
 
         self._downloader.setNamingTemplate(TemplateType.DESTINATION, selectedKey)
 
+    @QtCore.pyqtSlot(set)
+    def updateFolderPreview(self, folders: Iterable[str]) -> None:
+        self.previewer.setFolders(folders)
+
     def _updateTemplateCmb(self):
         downloader = self._downloader
 
@@ -192,6 +212,7 @@ class DestinationPanel(QtWidgets.QScrollArea):
 
     destinationSelected = QtCore.pyqtSignal(Path)
     destinationNamingTemplateSelected = QtCore.pyqtSignal(str)
+    folderPreviewChanged = QtUtil.QtSignalAdapter(set)
 
     def __init__(
             self,
@@ -233,3 +254,4 @@ class DestinationPanel(QtWidgets.QScrollArea):
 
         self.destinationSelected.connect(self.destinationWidget.showSelectedDestination)
         self.destinationNamingTemplateSelected.connect(self.destinationWidget.showDestinationNamingTemplate)
+        self.folderPreviewChanged.connect(self.destinationWidget.updateFolderPreview)

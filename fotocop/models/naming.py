@@ -165,7 +165,8 @@ class Token(TokenNode):
 
         # Session family
         if genusName == "Session":
-            return image.session
+            session = image.session
+            return session if session else "NO_SESSION"
 
         # Free text token
         if genusName == "Free text":
@@ -276,6 +277,10 @@ class NamingTemplate:
         self.extension = Case.LOWERCASE
         self.isBuiltin = True
 
+        self.sessionRequired = any(
+            [token.genusName == "Session" for token in self.template]
+        )
+
     def asText(self) -> str:
         return "".join(token.asText() for token in self.template)
 
@@ -288,7 +293,13 @@ class NamingTemplate:
             start = end
         return boundaries
 
-    def format(self, image: "Image", sequences: "Sequences", downloadTime: datetime, kind: TemplateType = TemplateType.IMAGE) -> str:
+    def format(
+            self,
+            image: "Image",
+            sequences: "Sequences",
+            downloadTime: datetime,
+            kind: TemplateType = TemplateType.IMAGE
+    ) -> str:
         name = "".join(token.format(image, sequences, downloadTime) for token in self.template)
         if kind == TemplateType.IMAGE:
             if self.extension == Case.LOWERCASE:

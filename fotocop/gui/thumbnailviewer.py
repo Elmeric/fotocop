@@ -393,11 +393,13 @@ class ThumbnailViewer(QtWidgets.QWidget):
         )
         self.sessionTxt.setValidator(validator)
         self.applySessionBtn = QtWidgets.QPushButton("Apply")
+        self.removeSessionBtn = QtWidgets.QPushButton("Remove")
         sessionLayout = QtWidgets.QHBoxLayout()
         sessionLayout.setContentsMargins(interToolsSpacing, 0, interToolsSpacing, 0)
         sessionLayout.addWidget(self.sessionLbl)
         sessionLayout.addWidget(self.sessionTxt)
         sessionLayout.addWidget(self.applySessionBtn)
+        sessionLayout.addWidget(self.removeSessionBtn)
         sessionWidget.setLayout(sessionLayout)
 
         spacer = QtWidgets.QWidget(self)
@@ -446,6 +448,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.sessionTxt.textEdited.connect(self.checkSession)
         self.sessionTxt.returnPressed.connect(self.applySession)
         self.applySessionBtn.clicked.connect(self.applySession)
+        self.removeSessionBtn.clicked.connect(self.removeSession)
 
         self.allBtn.setEnabled(False)
         self.noneBtn.setEnabled(False)
@@ -453,6 +456,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.filterBtn.setEnabled(False)
         self.selStatusLbl.hide()
         self.applySessionBtn.setEnabled(False)
+        self.removeSessionBtn.setEnabled(False)
         self.zoomLevelSelector.setEnabled(False)
 
     @QtCore.pyqtSlot(Selection)
@@ -535,14 +539,14 @@ class ThumbnailViewer(QtWidgets.QWidget):
         """Update the session editor text and apply action availability.
         """
         thumbnailView = self.thumbnailView
-        proxy = thumbnailView.model()
-        model = proxy.sourceModel()
         selectedProxyIndexes = thumbnailView.selectionModel().selection().indexes()
         session = self._sessionOfSelectedImages(selectedProxyIndexes)
 
         # In all cases, indicates the selected images count if not null.
         applyCount = f" ({len(selectedProxyIndexes)})" if selectedProxyIndexes else ""
         self.applySessionBtn.setText(f"Apply{applyCount}")
+        self.removeSessionBtn.setText(f"Remove{applyCount}")
+        self.removeSessionBtn.setEnabled(session is not None and session != "")
 
         # Empty selection: cannot apply any session (but leave edited session unchanged if any).
         if session is None:
@@ -550,7 +554,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
             return
 
         editedSession = self.sessionTxt.text()
-        if session == "":
+        if session in ("", "!="):
             # The selected images have empty or different sessions: can apply the edited
             # session if not empty, but select it to ease its modification.
             self.applySessionBtn.setEnabled(editedSession != "")
@@ -596,10 +600,22 @@ class ThumbnailViewer(QtWidgets.QWidget):
         session = self.sessionTxt.text()
         proxy = self.thumbnailView.model()
         model = proxy.sourceModel()
-        # print(f"Applying session {session} on {len(selectedProxyIndexes)} images")
         for proxyIndex in selectedProxyIndexes:
             model.setData(
                 proxy.mapToSource(proxyIndex), session, ImageModel.UserRoles.SessionRole
+            )
+        self.thumbnailView.selectionModel().clearSelection()
+        self.sessionTxt.clear()
+        self.applySessionBtn.setEnabled(False)
+
+    @QtCore.pyqtSlot()
+    def removeSession(self):
+        selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
+        proxy = self.thumbnailView.model()
+        model = proxy.sourceModel()
+        for proxyIndex in selectedProxyIndexes:
+            model.setData(
+                proxy.mapToSource(proxyIndex), "", ImageModel.UserRoles.SessionRole
             )
         self.thumbnailView.selectionModel().clearSelection()
         self.sessionTxt.clear()
@@ -662,7 +678,11 @@ class ThumbnailViewer(QtWidgets.QWidget):
             # The selected images have all the same non-empty session.
             return session
 
-        # The selected images have empty or different sessions.
+        if session:
+            # The selected images have different sessions.
+            return "!="
+
+        # The selected images have all an empty session.
         return ""
 
 

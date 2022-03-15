@@ -70,7 +70,7 @@ class Downloader(metaclass=Singleton):
     imageNamingTemplateSelected = QtUtil.QtSignalAdapter(str)
     imageNamingExtensionSelected = QtUtil.QtSignalAdapter(Case)
     destinationNamingTemplateSelected = QtUtil.QtSignalAdapter(str)
-    sessionRequired = QtUtil.QtSignalAdapter()
+    sessionRequired = QtUtil.QtSignalAdapter(bool)
     folderPreviewChanged = QtUtil.QtSignalAdapter(set)
 
     listBuiltinNamingTemplates = DelegatedAttribute("_namingTemplates", "listBuiltins")
@@ -242,14 +242,16 @@ class Downloader(metaclass=Singleton):
         return imageSample
 
     def _checkSession(self):
-        if self.imageNamingTemplate.sessionRequired or self.destinationNamingTemplate.sessionRequired:
-            source = self._source
-            if source is not None and source.images:
-                for image in source.images.values():
-                    if image.isSelected and not image.session:
-                        print("Session required")
-                        self.sessionRequired.emit()
-                        break
+        sessionRequired = self.imageNamingTemplate.sessionRequired or self.destinationNamingTemplate.sessionRequired
+        self.sessionRequired.emit(sessionRequired)
+        # if self.imageNamingTemplate.sessionRequired or self.destinationNamingTemplate.sessionRequired:
+        #     source = self._source
+        #     if source is not None and source.images:
+        #         for image in source.images.values():
+        #             if image.isSelected and not image.session:
+        #                 print("Session required")
+        #                 self.sessionRequired.emit()
+        #                 break
 
 
 @dataclass

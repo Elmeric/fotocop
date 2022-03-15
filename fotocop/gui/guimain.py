@@ -109,6 +109,7 @@ class QtMainView(QtWidgets.QMainWindow):
         self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
         self._downloader.destinationNamingTemplateSelected.connect(destinationPanel.destinationNamingTemplateSelected)
         self._downloader.folderPreviewChanged.connect(destinationPanel.folderPreviewChanged)
+        self._downloader.sessionRequired.connect(thumbnailViewer.requestSession)
         thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
         timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
         timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)

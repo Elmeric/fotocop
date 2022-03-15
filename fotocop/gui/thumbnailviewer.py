@@ -43,6 +43,7 @@ class ImageModel(QtCore.QAbstractListModel):
         super().__init__(parent)
 
         self.images = images or list()
+        self.sessionRequired = False
 
     def rowCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
         return len(self.images)
@@ -83,9 +84,13 @@ class ImageModel(QtCore.QAbstractListModel):
             session = image.session
             if datetime_:
                 year, month, day, hour, minute, second = datetime_
+                tip = f"{year}{month}{day}-{hour}{minute}{second}"
                 if session:
-                    return f"{year}{month}{day}-{hour}{minute}{second}\n{session}"
-                return f"{year}{month}{day}-{hour}{minute}{second}"
+                    return f"{tip}\n\n{session}"
+                elif self.sessionRequired and image.isSelected:
+                    return f"{tip}\n\nA session is required!"
+                else:
+                    return tip
             else:
                 return None
 
@@ -149,11 +154,13 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         super().__init__(parent)
         resources = Config.fotocopSettings.resources
         self.dummyImage = QtGui.QPixmap(f"{resources}/dummy-image.png")
+        self.sessionRequired = False
 
     def paint(self, painter, option, index):
         imageName = index.data(QtCore.Qt.DisplayRole)
+        imageSession = index.data(ImageModel.UserRoles.SessionRole)
+        imageIsSelected = index.data(QtCore.Qt.CheckStateRole) == QtCore.Qt.Checked
         imageThumb, aspectRatio, orientation = index.data(ImageModel.UserRoles.ThumbnailRole)
-        # imageThumb, aspectRatio, orientation = index.data(QtCore.Qt.UserRole)
 
         if imageThumb == "loading":
             px = self.dummyImage
@@ -223,6 +230,22 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.drawPixmap(target, px, source)
         painter.drawText(textRect, QtCore.Qt.AlignCenter, imageName)
+        if self.sessionRequired and imageIsSelected and not imageSession:
+            sessionRect = QtCore.QRect(
+                rect.left() + CELL_IN_WIDTH - CAPTION_HEIGHT,
+                cellTop,
+                CAPTION_HEIGHT,
+                CAPTION_HEIGHT
+            )
+            font = painter.font()
+            fontSize = font.pointSize()
+            font.setPointSize(fontSize + 4)
+            pen = QtGui.QPen(QtGui.QColor("darkorange"), 2)
+            painter.setPen(pen)
+            painter.setFont(font)
+            painter.drawText(sessionRect, QtCore.Qt.AlignCenter, "\u26A0")  # /!\
+            font.setPointSize(fontSize)
+            painter.setFont(font)
 
         pen = QtGui.QPen(QtGui.QColor("gray"), 2)
         painter.setPen(pen)
@@ -620,6 +643,13 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.thumbnailView.selectionModel().clearSelection()
         self.sessionTxt.clear()
         self.applySessionBtn.setEnabled(False)
+
+    @QtCore.pyqtSlot(bool)
+    def requestSession(self, sessionRequired: bool) -> None:
+        thumbnailView = self.thumbnailView
+        thumbnailView.itemDelegate().sessionRequired = sessionRequired
+        thumbnailView.model().sourceModel().sessionRequired = sessionRequired
+        thumbnailView.viewport().repaint()
 
     def _updateSelStatus(self):
         imagesCount = self.thumbnailView.model().sourceModel().rowCount()

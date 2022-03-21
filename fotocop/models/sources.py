@@ -18,6 +18,7 @@ from fotocop.models import settings as Config
 from fotocop.models.timeline import Timeline
 from fotocop.models.imagescanner import ImageScanner
 from fotocop.models.exifloader import ExifLoader
+from fotocop.models.sqlpersistence import DownloadedDB
 
 __all__ = [
     "SourceType", "DriveType", "Selection", "Image", "SourceManager", "Datation",
@@ -107,9 +108,13 @@ class Selection:
         else:
             return ''
 
-    def updateImages(self, batch: int, images: List[Tuple[str, str]]):
+    def updateImages(self, batch: int, images: List[Tuple[str, str, str, datetime]]):
         currentPath = self.path
-        newImages = {path: Image(name, path) for name, path in images if path.startswith(currentPath)}
+        newImages = {
+            path: Image(name, path, downloadPath, downloadTime)
+            for name, path, downloadPath, downloadTime in images
+            if path.startswith(currentPath)
+        }
         if newImages:
             self.images.update(newImages)
             # New images are selected by default
@@ -173,14 +178,20 @@ class Datation(NamedTuple):
 class Image:
     name: str
     path: str
+    downloadPath: str = None
+    downloadTime: datetime = None
 
     def __post_init__(self):
         self.extension = Path(self.name).suffix
         self.stem = Path(self.name).stem
+        self.isPreviouslyDownloaded: bool = False
         self._isSelected: bool = True
         self._datetime: Optional[Datation] = None
         self._session = ""
         self.loadingInProgress = False
+
+        if self.downloadPath is not None:
+            self.markAsPreviouslyDownloaded()
 
     @property
     def isLoaded(self) -> bool:
@@ -258,6 +269,20 @@ class Image:
         else:
             logger.debug(f"Got image: {self.name} {aspectRatio} {orientation} from cache")
             return imgdata, aspectRatio, orientation
+
+    def markAsPreviouslyDownloaded(self) -> None:
+        if self.isPreviouslyDownloaded:
+            return
+
+        self.isPreviouslyDownloaded = True    # noqa
+        self.isSelected = False
+        self.downloadPath = "."
+        self.downloadTime = datetime.now()
+        name = self.name
+        stat = Path(self.path).stat()
+        size = stat.st_size
+        mtime = stat.st_mtime
+        SourceManager().downloadedDb.addDownloadedFile(name, size, mtime, ".")
 
 
 class ImageScannerListener(Thread):
@@ -392,11 +417,13 @@ class SourceManager(metaclass=Singleton):
         self._buildTimelineInProgress = False
         self._exifRequestor = None
 
+        self.downloadedDb = DownloadedDB()
+
         # Start the image scanner process and establish a Pipe connection with it
         logger.info("Starting image scanner...")
         imageScannerConnection, child_conn1 = Pipe()
         self.imageScannerConnection = imageScannerConnection
-        self.imageScanner = ImageScanner(child_conn1)
+        self.imageScanner = ImageScanner(child_conn1, self.downloadedDb)
         self.imageScanner.start()
         child_conn1.close()
 

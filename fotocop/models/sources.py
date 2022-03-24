@@ -161,6 +161,32 @@ class Selection:
             image.loadingInProgress = False
             SourceManager().thumbnailLoaded.emit(imageKey)
 
+    def imagesSelectedStateChanged(self):
+        print(f"{len(self.images)} images, {len([i for i in self.images.values() if i.isLoaded and i.isSelected])} selected")
+        SourceManager().imagesSelectionChanged.emit()
+
+    def imagesSessionChanged(self):
+        print(f"{len(self.images)} images, {len([i for i in self.images.values() if i.session])} with session")
+        SourceManager().imagesSessionChanged.emit()
+
+    def markAsPreviouslyDownloaded(self, images: List["Image"]) -> None:
+        records = list()
+        now = datetime.now()
+
+        for image in images:
+            if not image.isPreviouslyDownloaded:
+                image.isPreviouslyDownloaded = True    # noqa
+                image.isSelected = False
+                image.downloadPath = "."
+                image.downloadTime = now
+                name = image.name
+                stat = Path(image.path).stat()
+                size = stat.st_size
+                mtime = stat.st_mtime
+                records.append((name, size, mtime, ".", now))
+
+        SourceManager().downloadedDb.addDownloadedFiles(records)
+
 
 class Datation(NamedTuple):
     year: str
@@ -191,7 +217,9 @@ class Image:
         self.loadingInProgress = False
 
         if self.downloadPath is not None:
-            self.markAsPreviouslyDownloaded()
+            self.isPreviouslyDownloaded = True
+            self.isSelected = False
+            # self.markAsPreviouslyDownloaded()
 
     @property
     def isLoaded(self) -> bool:
@@ -209,7 +237,7 @@ class Image:
             sel = 1 if value else -1
             sourceManager = SourceManager()
             sourceManager.selection.selectedImagesCount += sel
-            sourceManager.imagesSelectionChanged.emit()
+            # sourceManager.imagesSelectionChanged.emit()
 
     @property
     def datetime(self) -> Optional[Datation]:
@@ -237,7 +265,7 @@ class Image:
         old = self._session
         if value != old:
             self._session = value   # noqa
-            SourceManager().imagesSessionChanged.emit()
+            # SourceManager().imagesSessionChanged.emit()
 
     def getExif(self, command: ExifLoader.Command):
         SourceManager().exifLoaderConnection.send(

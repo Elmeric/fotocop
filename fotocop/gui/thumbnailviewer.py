@@ -9,6 +9,7 @@ import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
+from fotocop.util.rangeutil import runs
 from fotocop.models import settings as Config
 from fotocop.models.sources import Selection
 from fotocop.models.timeline import TimeRange
@@ -172,10 +173,77 @@ class ImageModel(QtCore.QAbstractListModel):
                 (ImageModel.UserRoles.ThumbnailRole, ImageModel.UserRoles.DateTimeRole),
             )
 
+    def setDataRange(
+            self,
+            selection: List[QtCore.QModelIndex],
+            value: Any,
+            role: int = QtCore.Qt.EditRole
+    ) -> bool:
+        rows = list()
+        toBeMarked = list()
+        for index in selection:
+            row = index.row()
+            rows.append(row)
+            image = self.images[row]
+            if role == QtCore.Qt.CheckStateRole:
+                image.isSelected = value
+
+            elif role == ImageModel.UserRoles.SessionRole:
+                image.session = value
+
+            elif role == ImageModel.UserRoles.PreviouslyDownloadedRole:
+                toBeMarked.append(image)
+                # image.markAsPreviouslyDownloaded()
+            else:
+                return False
+
+        if toBeMarked:
+            value.markAsPreviouslyDownloaded(toBeMarked)
+
+        rows.sort()
+        for first, last in runs(rows):
+            self.dataChanged.emit(
+                self.index(first, 0),
+                self.index(last, 0),
+                (role,)
+            )
+        return True
+
+    def setSelectionState(self, selection: List[QtCore.QModelIndex], state: bool) -> None:
+        rows = list()
+        for index in selection:
+            row = index.row()
+            rows.append(row)
+            image = self.images[row]
+            image.isSelected = state
+        rows.sort()
+        for first, last in runs(rows):
+            self.dataChanged.emit(
+                self.index(first, 0),
+                self.index(last, 0),
+                (QtCore.Qt.CheckStateRole,)
+            )
+
+    def setSession(self, selection: List[QtCore.QModelIndex], session: str) -> None:
+        rows = list()
+        for index in selection:
+            row = index.row()
+            rows.append(row)
+            image = self.images[row]
+            image.session = session
+        rows.sort()
+        for first, last in runs(rows):
+            self.dataChanged.emit(
+                self.index(first, 0),
+                self.index(last, 0),
+                (ImageModel.UserRoles.SessionRole,)
+            )
+
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
-    def __init__(self, parent=None):
+    def __init__(self, viewer: "ThumbnailViewer", parent=None):
         super().__init__(parent)
+        self.viewer = viewer
         resources = Config.fotocopSettings.resources
         self.dummyImage = QtGui.QPixmap(f"{resources}/dummy-image.png")
         self.sessionRequired = False
@@ -372,6 +440,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
                 QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
             )
         model.setData(index, state, QtCore.Qt.CheckStateRole)
+        self.viewer._sourceSelection.imagesSelectedStateChanged()
         if event.type() == QtCore.QEvent.KeyPress:
             return False
         else:
@@ -401,8 +470,8 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.logger = logging.getLogger(__name__)
 
-        self.thumbnailView = ThumbnailView()
-        self.thumbnailView.setItemDelegate(ThumbnailDelegate())
+        self.thumbnailView = ThumbnailView(parent=self)
+        self.thumbnailView.setItemDelegate(ThumbnailDelegate(viewer=self))
 
         proxyModel = ThumbnailFilterProxyModel()
         self._imageModel = ImageModel()
@@ -500,7 +569,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
             self.onSelectionChanged
         )
         self.thumbnailView.markAsDownloadedAct.triggered.connect(
-            self.doMarkAsDownloadedAct
+            self.markImagesAsDownloaded
         )
         newChk.toggled.connect(self.toggleNewOnly)
         self.allBtn.clicked.connect(lambda: self.setSelected(QtCore.Qt.Checked))
@@ -549,11 +618,21 @@ class ThumbnailViewer(QtWidgets.QWidget):
     def setSelected(self, state: QtCore.Qt.CheckState):
         proxy = self.thumbnailView.model()
         model = proxy.sourceModel()
-        for i in range(proxy.rowCount()):
-            proxyIndex = proxy.index(i, 0)
-            model.setData(
-                proxy.mapToSource(proxyIndex), state, QtCore.Qt.CheckStateRole
-            )
+
+        selectedIndexes = [
+            proxy.mapToSource(proxy.index(i, 0))
+            for i in range(proxy.rowCount())
+        ]
+        model.setDataRange(
+            selectedIndexes,
+            True if state == QtCore.Qt.Checked else False,
+            QtCore.Qt.CheckStateRole
+        )
+        # model.setSelectionState(
+        #     selectedIndexes,
+        #     True if state == QtCore.Qt.Checked else False
+        # )
+        self._sourceSelection.imagesSelectedStateChanged()
 
     @QtCore.pyqtSlot(QtCore.QModelIndex, QtCore.QModelIndex, "QVector<int>")
     def onImageModelChanged(
@@ -569,19 +648,26 @@ class ThumbnailViewer(QtWidgets.QWidget):
             self._updateSelStatus()
 
     @QtCore.pyqtSlot()
-    def doMarkAsDownloadedAct(self) -> None:
-        selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
-
-        if selectedProxyIndexes is None:
-            return
+    def markImagesAsDownloaded(self) -> None:
+        # selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
+        #
+        # if selectedProxyIndexes is None:
+        #     return
 
         proxy = self.thumbnailView.model()
         model = proxy.sourceModel()
-        role = ImageModel.UserRoles.PreviouslyDownloadedRole
-        for proxyIndex in selectedProxyIndexes:
-            index = proxy.mapToSource(proxyIndex)
-            if not index.data(role):
-                model.setData(index, True, role)
+        selectedIndexes = proxy.mapSelectionToSource(
+            self.thumbnailView.selectionModel().selection()
+        ).indexes()
+        if len(selectedIndexes) <= 0:
+            return
+        model.setDataRange(selectedIndexes, self._sourceSelection, ImageModel.UserRoles.PreviouslyDownloadedRole)
+        self._sourceSelection.imagesSelectedStateChanged()
+        # role = ImageModel.UserRoles.PreviouslyDownloadedRole
+        # for proxyIndex in selectedProxyIndexes:
+        #     index = proxy.mapToSource(proxyIndex)
+        #     if not index.data(role):
+        #         model.setData(index, True, role)
 
     @QtCore.pyqtSlot(bool)
     def toggleNewOnly(self, checked: bool):
@@ -686,14 +772,20 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot()
     def applySession(self):
-        selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
+        # selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
         session = self.sessionTxt.text()
         proxy = self.thumbnailView.model()
         model = proxy.sourceModel()
-        for proxyIndex in selectedProxyIndexes:
-            model.setData(
-                proxy.mapToSource(proxyIndex), session, ImageModel.UserRoles.SessionRole
-            )
+        selectedIndexes = proxy.mapSelectionToSource(
+            self.thumbnailView.selectionModel().selection()
+        ).indexes()
+        model.setDataRange(selectedIndexes, session, ImageModel.UserRoles.SessionRole)
+        # model.setSession(selectedIndexes, session)
+        self._sourceSelection.imagesSessionChanged()
+        # for proxyIndex in selectedProxyIndexes:
+        #     model.setData(
+        #         proxy.mapToSource(proxyIndex), session, ImageModel.UserRoles.SessionRole
+        #     )
         self.thumbnailView.selectionModel().clearSelection()
         self.sessionTxt.clear()
         self.applySessionBtn.setEnabled(False)
@@ -703,10 +795,16 @@ class ThumbnailViewer(QtWidgets.QWidget):
         selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
         proxy = self.thumbnailView.model()
         model = proxy.sourceModel()
-        for proxyIndex in selectedProxyIndexes:
-            model.setData(
-                proxy.mapToSource(proxyIndex), "", ImageModel.UserRoles.SessionRole
-            )
+        selectedIndexes = proxy.mapSelectionToSource(
+            self.thumbnailView.selectionModel().selection()
+        ).indexes()
+        model.setDataRange(selectedIndexes, "", ImageModel.UserRoles.SessionRole)
+        # model.setSession(selectedIndexes, "")
+        self._sourceSelection.imagesSessionChanged()
+        # for proxyIndex in selectedProxyIndexes:
+        #     model.setData(
+        #         proxy.mapToSource(proxyIndex), "", ImageModel.UserRoles.SessionRole
+        #     )
         self.thumbnailView.selectionModel().clearSelection()
         self.sessionTxt.clear()
         self.applySessionBtn.setEnabled(False)
@@ -788,6 +886,7 @@ class ThumbnailView(QtWidgets.QListView):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self.parent = parent
         self.possiblyPreserveSelectionPostClick = False
 
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
@@ -801,6 +900,9 @@ class ThumbnailView(QtWidgets.QListView):
         self.setMinimumWidth(4 * CELL_WIDTH + 24)
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(QtCore.Qt.DefaultContextMenu)
+        self.setStyleSheet(
+            f"QListView{{background-color: {QtGui.QColor(240, 240, 240).name()};}}"
+        )
 
         self.contextMenu = QtWidgets.QMenu()
         self.markAsDownloadedAct = self.contextMenu.addAction("Mark as Downloaded")
@@ -855,32 +957,45 @@ class ThumbnailView(QtWidgets.QListView):
             super().mousePressEvent(event)
 
         else:
-            clickedIndex = self.indexAt(event.pos())
-            clickedRow = clickedIndex.row()
+            clickedProxyIndex = self.indexAt(event.pos())
+            clickedRow = clickedProxyIndex.row()
 
             if clickedRow >= 0:
-                rect = self.visualRect(clickedIndex)
-                delegate = self.itemDelegate(clickedIndex)
+                rect = self.visualRect(clickedProxyIndex)
+                delegate = self.itemDelegate(clickedProxyIndex)
                 checkboxRect = delegate.getCheckboxRect(rect)
                 checkboxClicked = checkboxRect.contains(event.pos())
 
                 if checkboxClicked:
                     self.possiblyPreserveSelectionPostClick = True
-                    selected = self.selectionModel().selection()
-                    model = self.model()
+                    proxy = self.model()
+                    model = proxy.sourceModel()
+                    selectedIndexes = proxy.mapSelectionToSource(self.selectionModel().selection()).indexes()
+                    clickedIndex = proxy.mapToSource(clickedProxyIndex)
                     state = model.data(clickedIndex, QtCore.Qt.CheckStateRole)
-                    state = (
-                        QtCore.Qt.Unchecked
-                        if state == QtCore.Qt.Checked
-                        else QtCore.Qt.Checked
-                    )
+                    # state = (
+                    #     QtCore.Qt.Unchecked
+                    #     if state == QtCore.Qt.Checked
+                    #     else QtCore.Qt.Checked
+                    # )
                     if (
-                        len(selected.indexes()) > 1
-                        and clickedIndex in selected.indexes()
+                        len(selectedIndexes) > 1
+                        and clickedIndex in selectedIndexes
                     ):
-                        for index in selected.indexes():
-                            if not index == clickedIndex:
-                                model.setData(index, state, QtCore.Qt.CheckStateRole)
+                        # for index in selected.indexes():
+                        #     if not index == clickedIndex:
+                        #         model.setData(index, state, QtCore.Qt.CheckStateRole)
+                        selection = [index for index in selectedIndexes if not index == clickedIndex]
+                        model.setDataRange(
+                            selection,
+                            False if state == QtCore.Qt.Checked else True,
+                            QtCore.Qt.CheckStateRole
+                        )
+                        # model.setSelectionState(
+                        #     selection,
+                        #     False if state == QtCore.Qt.Checked else True
+                        # )
+                        self.parent._sourceSelection.imagesSelectedStateChanged()
 
             super().mousePressEvent(event)
 
@@ -901,7 +1016,10 @@ class ThumbnailView(QtWidgets.QListView):
         Args:
             event: the mouse click event
         """
-        selectedIndexes = self.selectionModel().selection().indexes()
+        proxy = self.model()
+        model = proxy.sourceModel()
+        selectedIndexes = proxy.mapSelectionToSource(self.selectionModel().selection()).indexes()
+        # selectedIndexes = self.selectionModel().selection().indexes()
         if len(selectedIndexes) < 1 or event.key() not in (
             QtCore.Qt.Key_Space,
             QtCore.Qt.Key_Select,
@@ -909,15 +1027,25 @@ class ThumbnailView(QtWidgets.QListView):
             super().keyPressEvent(event)
 
         else:
-            clickedIndex = self.currentIndex()
-            model = self.model()
+            clickedIndex = proxy.mapToSource(self.currentIndex())
             state = model.data(clickedIndex, QtCore.Qt.CheckStateRole)
-            state = (
-                QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
+            # state = (
+            #     QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
+            # )
+            # for index in selectedIndexes:
+            #     if not index == clickedIndex:
+            #         model.setData(index, state, QtCore.Qt.CheckStateRole)
+            selection = [index for index in selectedIndexes if not index == clickedIndex]
+            model.setDataRange(
+                selection,
+                False if state == QtCore.Qt.Checked else True,
+                QtCore.Qt.CheckStateRole
             )
-            for index in selectedIndexes:
-                if not index == clickedIndex:
-                    model.setData(index, state, QtCore.Qt.CheckStateRole)
+            # model.setSelectionState(
+            #     selection,
+            #     False if state == QtCore.Qt.Checked else True
+            # )
+            self.parent._sourceSelection.imagesSelectedStateChanged()
 
             super().keyPressEvent(event)
 

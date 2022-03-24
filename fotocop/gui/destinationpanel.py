@@ -226,7 +226,8 @@ class DestinationPanel(QtWidgets.QScrollArea):
 
         self.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.setWidgetResizable(True)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        # self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
 
         destinationPanel = QtUtil.QPanelView(
             label='Destination', headerColor=QtGui.QColor(ThumbnailBackgroundName),

@@ -43,6 +43,7 @@ class ScanHandler(StoppableThread):
                     imagesBatch = list()
                     break
                 if self._isImage(f):
+                    # previouslyDownloaded = None
                     previouslyDownloaded = self._isAlreadyDownloaded(f)
                     if previouslyDownloaded is not None:
                         downloadPath, downloadTime = previouslyDownloaded

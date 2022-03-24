@@ -47,18 +47,18 @@ class FileSystemModel(QtWidgets.QFileSystemModel):
         # First value: subfolders we've created to demonstrate to the user
         # where their files will be downloaded to
         self.previewFolders = set()  # type: Set[str]
-        self.previewFolders = {"F:/Users/Images/Mes Photos/Négatifs/2021/2021-04"}
+        # self.previewFolders = {"F:/Users/Images/Mes Photos/Négatifs/2021/2021-04"}
         # Second value: subfolders that already existed, but that we still
         # want to indicate to the user where their files will be downloaded to
         self.destinationFolders = set()  # type: Set[str]
-        self.destinationFolders = {"F:/Users/Images/Mes Photos/Négatifs/2021/2021-03"}
+        # self.destinationFolders = {"F:/Users/Images/Mes Photos/Négatifs/2021/2021-03"}
 
         # Folders that were actually used to download files into
         self.downloadedFolders = set()  # type: Set[str]
-        self.addToDownloadedFolders(
-            "F:/Users/Images/Mes Photos/Négatifs/2022/2022-01",
-            "F:/Users/Images/Mes Photos/Négatifs"
-        )
+        # self.addToDownloadedFolders(
+        #     "F:/Users/Images/Mes Photos/Négatifs/2022/2022-01",
+        #     "F:/Users/Images/Mes Photos/Négatifs"
+        # )
 
     def data(self, index: QtCore.QModelIndex, role=QtCore.Qt.DisplayRole):
         if role == QtCore.Qt.DecorationRole:

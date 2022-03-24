@@ -202,12 +202,15 @@ class Downloader(metaclass=Singleton):
 
     def _updateImages(self) -> None:
         images = self._source.images
-        selectedImages = [
-            image
-            for image in images.values()
-            if image.isLoaded and image.isSelected
-        ]
-        self._imageMoverConnection.send((ImageMover.Command.SET_IMAGES, selectedImages))
+        # images = list(self._source.images.values())
+        # images = self._source.images
+        # selectedImages = [
+        #     image
+        #     for image in images.values()
+        #     if image.isLoaded and image.isSelected
+        # ]
+        self._imageMoverConnection.send((ImageMover.Command.SET_IMAGES, images))
+        # self._imageMoverConnection.send((ImageMover.Command.SET_IMAGES, selectedImages))
 
     def _updatePreview(self, imageOnly: bool = False) -> None:
         # Update image sample name and path.

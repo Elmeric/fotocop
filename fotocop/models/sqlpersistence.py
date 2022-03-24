@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
 import logging
-from typing import Optional, NamedTuple
+from typing import Optional, NamedTuple, Tuple, List
 
 from fotocop.models import settings as Config
 
@@ -90,6 +90,37 @@ class DownloadedDB:
         except sqlite3.OperationalError as e:
             logging.warning(
                 f"Database error adding downloaded file {downloadedAs}: {e}. May retry."
+            )
+            conn.close()
+            raise sqlite3.OperationalError from e
+        else:
+            conn.commit()
+            conn.close()
+
+    # @retry(stop=stop_after_attempt(SQLITE3_RETRY_ATTEMPTS))
+    def addDownloadedFiles(
+        self, records: List[Tuple[str, int, float, str, datetime.datetime]]
+    ) -> None:
+        """
+        Add multiple files to database of downloaded files.
+
+        Args:
+            records: images data to be added.
+        """
+        conn = sqlite3.connect(self._db, timeout=SQLITE3_TIMEOUT)
+
+        logging.debug(f"Adding {len(records)} images to downloaded files")
+
+        try:
+            conn.executemany(
+                fr"""INSERT OR REPLACE INTO {self._tableName} (file_name, size, mtime,
+                    download_name, download_datetime) VALUES (?,?,?,?,?)
+                """,
+                records,
+            )
+        except sqlite3.OperationalError as e:
+            logging.warning(
+                f"Database error adding downloaded files: {e}. May retry."
             )
             conn.close()
             raise sqlite3.OperationalError from e

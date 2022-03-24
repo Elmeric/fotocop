@@ -168,6 +168,13 @@ def scaledIcon(path: str, size: Optional[QtCore.QSize] = None) -> QtGui.QIcon:
     return i
 
 
+def setElidedText(label: QtWidgets.QLabel, text: str):
+    fm = label.fontMetrics()
+    width = label.width() - 2
+    elidedText = fm.elidedText(text, QtCore.Qt.ElideMiddle, width)
+    label.setText(elidedText)
+
+
 class MyAppStyle(QtWidgets.QProxyStyle):
     """A QProxyStyle specialization to adjust some default style settings.
 

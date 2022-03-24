@@ -47,11 +47,11 @@ class SourceSelector(QtWidgets.QWidget):
         refreshIcon = QtGui.QIcon(f"{resources}/reload.png")
         refreshTip = "Refresh devices and files source lists"
 
-        self.sourcePix = QtWidgets.QLabel()
-        self.sourceLbl = QtWidgets.QLabel()
-        self.sourceLbl.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.sourceLbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
-        self.sourceLbl.setFixedWidth(350)
+        # self.sourcePix = QtWidgets.QLabel()
+        # self.sourceLbl = QtWidgets.QLabel()
+        # self.sourceLbl.setFrameShape(QtWidgets.QFrame.NoFrame)
+        # self.sourceLbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        # self.sourceLbl.setFixedWidth(350)
 
         deviceLbl = QtWidgets.QLabel("DEVICES")
         deviceLbl.setMaximumHeight(32)
@@ -78,16 +78,17 @@ class SourceSelector(QtWidgets.QWidget):
         refreshFileBtn.setFlat(True)
         self.subDirsChk = QtWidgets.QCheckBox("Include sub folders")
 
-        srcLayout = QtWidgets.QHBoxLayout()
-        srcLayout.addWidget(self.sourcePix, 0, QtCore.Qt.AlignCenter)
-        srcLayout.addWidget(self.sourceLbl, 0, QtCore.Qt.AlignCenter)
-        srcLayout.addStretch()
+        # srcLayout = QtWidgets.QHBoxLayout()
+        # srcLayout.addWidget(self.sourcePix, 0, QtCore.Qt.AlignCenter)
+        # srcLayout.addWidget(self.sourceLbl, 0, QtCore.Qt.AlignCenter)
+        # srcLayout.addStretch()
 
         devHeader = QtWidgets.QWidget()
         headerColor = QtGui.QColor('#5d5b59')
         headerFontColor = QtGui.QColor(QtCore.Qt.white)
         headerStyle = f"""QWidget {{ background-color: {headerColor.name()}; color: {headerFontColor.name()};}}"""
         devHeader.setStyleSheet(headerStyle)
+        devHeader.setMinimumWidth(350)
         devHeader.setSizePolicy(QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Fixed)
 
         devHLayout = QtWidgets.QHBoxLayout()
@@ -143,7 +144,7 @@ class SourceSelector(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addLayout(srcLayout)
+        # layout.addLayout(srcLayout)
         layout.addLayout(devVLayout)
         layout.addWidget(fileHeader)
         layout.addWidget(scrollArea)
@@ -268,22 +269,22 @@ class SourceSelector(QtWidgets.QWidget):
             idx = t.model().mapFromSource(self._fsModel.index(p))
             t.scrollTo(idx, QtWidgets.QAbstractItemView.EnsureVisible)
 
-        resources = Config.fotocopSettings.resources
+        # resources = Config.fotocopSettings.resources
 
         source = selection.source
         kind = selection.kind
 
         if kind == SourceType.DEVICE:
             caption = source.caption
-            self.sourcePix.setPixmap(
-                QtGui.QPixmap(f"{resources}/device.png").scaledToHeight(
-                    48, QtCore.Qt.SmoothTransformation
-                )
-            )
-            self._setElidedText(self.sourceLbl, f"FROM {caption}\nAll pictures")
-            toolTip = f"Device: {caption}"
-            self.sourceLbl.setToolTip(toolTip)
-            self.sourceLbl.setStatusTip(toolTip)
+            # self.sourcePix.setPixmap(
+            #     QtGui.QPixmap(f"{resources}/device.png").scaledToHeight(
+            #         48, QtCore.Qt.SmoothTransformation
+            #     )
+            # )
+            # self._setElidedText(self.sourceLbl, f"FROM {caption}\nAll pictures")
+            # toolTip = f"Device: {caption}"
+            # self.sourceLbl.setToolTip(toolTip)
+            # self.sourceLbl.setStatusTip(toolTip)
 
             item = self.devicesLst.findItems(caption, QtCore.Qt.MatchExactly)[0]
             index = self.devicesLst.indexFromItem(item)
@@ -291,21 +292,21 @@ class SourceSelector(QtWidgets.QWidget):
                 self.devicesLst.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
 
         elif kind == SourceType.DRIVE:
-            icon = SourceSelector.DRIVE_ICON.get(source.kind, "drive.png")
-            self.sourcePix.setPixmap(
-                QtGui.QPixmap(f"{resources}/{icon}").scaledToHeight(
-                    48, QtCore.Qt.SmoothTransformation
-                )
-            )
-            caption = source.caption
+            # icon = SourceSelector.DRIVE_ICON.get(source.kind, "drive.png")
+            # self.sourcePix.setPixmap(
+            #     QtGui.QPixmap(f"{resources}/{icon}").scaledToHeight(
+            #         48, QtCore.Qt.SmoothTransformation
+            #     )
+            # )
+            # caption = source.caption
             path = source.selectedPath
             posixPath = path.as_posix()
-            sourcePath = posixPath[3:].replace("/", " / ")
+            # sourcePath = posixPath[3:].replace("/", " / ")
             subDirs = source.subDirs
-            self._setElidedText(self.sourceLbl, f"FROM {caption}\n{sourcePath}{' +' if subDirs else ''}")
-            toolTip = f"Drive: {caption}\nPath: {posixPath}{' (including subfolders)' if subDirs else ''}"
-            self.sourceLbl.setToolTip(toolTip)
-            self.sourceLbl.setStatusTip(toolTip)
+            # self._setElidedText(self.sourceLbl, f"FROM {caption}\n{sourcePath}{' +' if subDirs else ''}")
+            # toolTip = f"Drive: {caption}\nPath: {posixPath}{' (including subfolders)' if subDirs else ''}"
+            # self.sourceLbl.setToolTip(toolTip)
+            # self.sourceLbl.setStatusTip(toolTip)
 
             driveId = source.id
             header, tree = self._diskHeaders[driveId]
@@ -327,16 +328,16 @@ class SourceSelector(QtWidgets.QWidget):
                 )
             tree.setFocus()
 
-        else:
-            assert kind == SourceType.UNKNOWN
-            self.sourcePix.setPixmap(
-                QtGui.QPixmap(f"{resources}/double-down.png").scaledToHeight(
-                    48, QtCore.Qt.SmoothTransformation
-                )
-            )
-            self.sourceLbl.setText("Select a source")
-            self.sourceLbl.setToolTip("")
-            self.sourceLbl.setStatusTip("")
+        # else:
+        #     assert kind == SourceType.UNKNOWN
+        #     self.sourcePix.setPixmap(
+        #         QtGui.QPixmap(f"{resources}/double-down.png").scaledToHeight(
+        #             48, QtCore.Qt.SmoothTransformation
+        #         )
+        #     )
+        #     self.sourceLbl.setText("Select a source")
+        #     self.sourceLbl.setToolTip("")
+        #     self.sourceLbl.setStatusTip("")
 
         self._delayedScrollTo = 0
 

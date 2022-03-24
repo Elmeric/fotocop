@@ -1,6 +1,6 @@
 import logging
 import json
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict
 from multiprocessing import Process, Event
 from enum import Enum, auto
 from pathlib import Path
@@ -254,8 +254,17 @@ class ImageMover(Process):
             assert kind == TemplateType.DESTINATION
             self._destinationNamingTemplate = template
 
-    def _setImages(self, images: List[Image]) -> None:
-        self._images = images
+    def _setImages(self, images: Dict[str, Image]) -> None:
+        selectedImages = [
+            image
+            for image in images.values()
+            if image.isLoaded and image.isSelected
+        ]
+        self._images = selectedImages
+        print(f"Received {len(images)} images, only {len(selectedImages)} are loaded and selected")
+        # for i in self._images:
+        #     print(i.path)
+        # self._images = images
 
     def _publishImagePreview(self, image: "Image") -> None:
         imageTemplate = self._imageNamingTemplate

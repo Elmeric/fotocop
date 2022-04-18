@@ -3,6 +3,7 @@ import json
 import re
 from typing import TYPE_CHECKING, Tuple, List, Dict, Optional, NamedTuple
 from dataclasses import dataclass
+from enum import Enum, auto
 from datetime import datetime, timedelta
 
 from fotocop.util.basicpatterns import visitable
@@ -10,10 +11,11 @@ from fotocop.models import settings as Config
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Image
-    from fotocop.models.downloader import Sequences
+    from fotocop.models.imagesmover import Sequences
 
 __all__ = [
     "Case",
+    "TemplateType",
     "TokensDescription",
     "TokenTree",
     "TokenFamily",
@@ -21,16 +23,20 @@ __all__ = [
     "Token",
     "NamingTemplate",
     "NamingTemplates",
-    "NamingTemplatesError"
 ]
 
 logger = logging.getLogger(__name__)
 
 
-class Case:
+class Case(Enum):
     ORIGINAL_CASE = "Original Case"
     UPPERCASE = "UPPERCASE"
     LOWERCASE = "lowercase"
+
+
+class TemplateType(Enum):
+    IMAGE = auto()
+    DESTINATION = auto()
 
 
 class FormatSpec(NamedTuple):
@@ -42,6 +48,10 @@ class FormatSpec(NamedTuple):
 @dataclass()
 class TokenNode:
     name: str
+    notAllowed = {
+        TemplateType.IMAGE: (),
+        TemplateType.DESTINATION: (),
+    }
 
     def __post_init__(self):
         self.parent: Optional["TokenNode"] = None
@@ -50,6 +60,9 @@ class TokenNode:
     @property
     def isLeaf(self) -> bool:
         return len(self.children) == 0
+
+    def isAllowed(self, kind: TemplateType) -> bool:
+        return self.name not in self.notAllowed[kind]
 
 
 @dataclass()
@@ -62,12 +75,18 @@ class TokenTree(TokenNode):
 
 @dataclass()
 class TokenFamily(TokenNode):
-    pass
+    notAllowed = {
+        TemplateType.IMAGE: (),
+        TemplateType.DESTINATION: ("Sequences",),
+    }
 
 
 @dataclass()
 class TokenGenus(TokenNode):
-    pass
+    notAllowed = {
+        TemplateType.IMAGE: ("Extension",),
+        TemplateType.DESTINATION: ("Name", "Image number"),
+    }
 
 
 @dataclass()
@@ -109,7 +128,7 @@ class Token(TokenNode):
             return filename
 
         if genusName == "Image number":
-            n = re.search("(?P<imageNumber>[0-9]+$)", image.stem)
+            n = re.search(r"(?P<imageNumber>\d+$)", image.stem)
             if not n:
                 return ""
 
@@ -121,6 +140,15 @@ class Token(TokenNode):
             assert fmt in ("%N1", "%N2", "%N3", "%N4")
             d = int(fmt[-1])
             return imageNumber[-d:]
+
+        if genusName == "Extension":
+            extension = image.extension[1:]
+            fmt = self.formatSpec.spec
+            if fmt == "%F":  # UPPERCASE
+                extension = extension.upper()
+            elif fmt == "%f":    # lowercase
+                extension = extension.lower()
+            return extension
 
         # Sequences family
         if genusName == "Downloads today":
@@ -137,7 +165,8 @@ class Token(TokenNode):
 
         # Session family
         if genusName == "Session":
-            return image.session
+            session = image.session
+            return session if session else "NO_SESSION"
 
         # Free text token
         if genusName == "Free text":
@@ -185,7 +214,7 @@ class TokensDescription:
     TOKEN_FAMILIES = ("Date time", "Filename", "Sequences", "Session")
     TOKEN_GENUS = {
         "Date time": ("Image date", "Today", "Yesterday", "Download time"),
-        "Filename": ("Name", "Image number"),
+        "Filename": ("Name", "Image number", "Extension"),
         "Sequences": ("Downloads today", "Stored number", "Session number", "Sequence letter"),
         "Session": ("Session",),
     }
@@ -197,6 +226,7 @@ class TokensDescription:
         "Download time": DATE_TIME_FORMATS,
         "Name": NAME_FORMATS,
         "Image number": IMAGE_NUMBER_FORMATS,
+        "Extension": NAME_FORMATS,
         "Downloads today": SEQUENCE_FORMATS,
         "Stored number": SEQUENCE_FORMATS,
         "Session number": SEQUENCE_FORMATS,
@@ -247,6 +277,22 @@ class NamingTemplate:
         self.extension = Case.LOWERCASE
         self.isBuiltin = True
 
+        self.sessionRequired = any(
+            [token.genusName == "Session" for token in self.template]
+        )
+
+        self.datetimeRequired = any(
+            [token.genusName == "Image date" for token in self.template]
+        )
+
+        self.useSessionNumber = any(
+            [token.genusName in ("Session number", "Sequence letter") for token in self.template]
+        )
+
+        self.useStoredNumber = any(
+            [token.genusName == "Stored number" for token in self.template]
+        )
+
     def asText(self) -> str:
         return "".join(token.asText() for token in self.template)
 
@@ -259,15 +305,25 @@ class NamingTemplate:
             start = end
         return boundaries
 
-    def format(self, image: "Image", sequences: "Sequences", downloadTime: datetime) -> str:
+    def format(
+            self,
+            image: "Image",
+            sequences: "Sequences",
+            downloadTime: datetime,
+            kind: TemplateType = TemplateType.IMAGE
+    ) -> str:
         name = "".join(token.format(image, sequences, downloadTime) for token in self.template)
-        if self.extension == Case.LOWERCASE:
-            extension = image.extension.lower()
-        elif self.extension == Case.UPPERCASE:
-            extension = image.extension.upper()
+        if kind == TemplateType.IMAGE:
+            if self.extension == Case.LOWERCASE:
+                extension = image.extension.lower()
+            elif self.extension == Case.UPPERCASE:
+                extension = image.extension.upper()
+            else:
+                extension = image.extension
+            return "".join((name, extension))
         else:
-            extension = image.extension
-        return "".join((name, extension))
+            assert kind == TemplateType.DESTINATION
+            return name
 
 
 class NamingTemplateDecoder(json.JSONDecoder):
@@ -294,6 +350,9 @@ class NamingTemplateDecoder(json.JSONDecoder):
                 token = Token(obj["name"], "Free text", None)
             return token
 
+        if "__case__" in obj:
+            return Case[obj["name"]]
+
         return obj
 
 
@@ -319,13 +378,11 @@ class NamingTemplateEncoder(json.JSONEncoder):
         if isinstance(obj, Token):
             return {"__token__": True, "name": obj.name}
 
+        if isinstance(obj, Case):
+            return {"__case__": True, "name": obj.name}
+
         # Let the base class default method raise the TypeError
         return json.JSONEncoder.default(self, obj)
-
-
-class NamingTemplatesError(Exception):
-    """Exception raised on naming templates saving error."""
-    pass
 
 
 class NamingTemplates:
@@ -400,15 +457,70 @@ class NamingTemplates:
             ),
         ),
     }
-    # PHOTO_SUBFOLDER_MENU_DEFAULTS = (
-    #     (_('Date'), _('YYYY'), _('YYYYMMDD')),
-    #     (_('Date (hyphens)'), _('YYYY'), _('YYYY-MM-DD')),
-    #     (_('Date (underscores)'), _('YYYY'), _('YYYY_MM_DD')),
-    #     (_('Date and Job Code'), _('YYYY'), _('YYYYMM_Job Code')),
-    #     (_('Date and Job Code Subfolder'), _('YYYY'), _('YYYYMM'), _('Job Code'))
-    # )
-    builtinDestinationNamingTemplates = {}
+
+    builtinDestinationNamingTemplates = {
+        "TPL_1": NamingTemplate(
+            "TPL_1",
+            "Date - YYYY/YYYYmmDD",
+            (
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("/", "Free text", None),
+                tokensRootNode.tokensByName["Image date (YYYYmmDD)"],
+            ),
+        ),
+        "TPL_2": NamingTemplate(
+            "TPL_2",
+            "Date (hyphens) - YYYY/YYYY-mm-DD",
+            (
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("/", "Free text", None),
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("-", "Free text", None),
+                tokensRootNode.tokensByName["Image date (mm)"],
+                Token("-", "Free text", None),
+                tokensRootNode.tokensByName["Image date (DD)"],
+            ),
+        ),
+        "TPL_3": NamingTemplate(
+            "TPL_3",
+            "Date (underscores) - YYYY/YYYY_mm_DD",
+            (
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("/", "Free text", None),
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("_", "Free text", None),
+                tokensRootNode.tokensByName["Image date (mm)"],
+                Token("_", "Free text", None),
+                tokensRootNode.tokensByName["Image date (DD)"],
+            ),
+        ),
+        "TPL_4": NamingTemplate(
+            "TPL_4",
+            "Date and Session - YYYY/YYYYmm_Session",
+            (
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("/", "Free text", None),
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                tokensRootNode.tokensByName["Image date (mm)"],
+                Token("_", "Free text", None),
+                tokensRootNode.tokensByName["Session (Session)"],
+            ),
+        ),
+        "TPL_5": NamingTemplate(
+            "TPL_5",
+            "Date and Session Subfolder - YYYY/YYYYmm/Session",
+            (
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                Token("/", "Free text", None),
+                tokensRootNode.tokensByName["Image date (YYYY)"],
+                tokensRootNode.tokensByName["Image date (mm)"],
+                Token("/", "Free text", None),
+                tokensRootNode.tokensByName["Session (Session)"],
+            ),
+        ),
+    }
     defaultImageNamingTemplate = "TPL_1"
+    defaultDestinationNamingTemplate = "TPL_1"
 
     def __init__(self):
         settings = Config.fotocopSettings
@@ -420,23 +532,30 @@ class NamingTemplates:
     def getToken(cls, name: str) -> "Token":
         return cls.tokensRootNode.tokensByName[name]
 
+    @classmethod
+    def listBuiltins(cls, kind: TemplateType) -> List[NamingTemplate]:
+        if kind == TemplateType.IMAGE:
+            return list(cls.builtinImageNamingTemplates.values())
+        else:
+            assert kind == TemplateType.DESTINATION
+            return list(cls.builtinDestinationNamingTemplates.values())
+
     def _load(self):
         try:
             with self._templatesFile.open() as fh:
                 templates = json.load(fh, cls=NamingTemplateDecoder)
-                # templates = json.load(fh, object_hook=namingTemplateHook)
                 return templates["image"], templates["destination"]
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning(f"Cannot load custom naming templates: {e}")
             return dict(), dict()
 
-    def save(self):
+    def save(self) -> Tuple[bool, str]:
         """Save the custom naming templates on a JSON file.
 
         Use a dedicated JSONEncoder to handle NamingTemplate and Token objects.
 
-        Raises:
-            A NamingTemplatesError exception on OS or JSON encoding errors.
+        Returns:
+            A boolean status and associated error or success string message.
         """
         templates = {
             "image": self.image,
@@ -448,47 +567,80 @@ class NamingTemplates:
         except (OSError, TypeError) as e:
             msg = f"Cannot save custom naming templates: {e}"
             logger.warning(msg)
-            raise NamingTemplatesError(msg)
+            return False, msg
+        else:
+            return True, "Custom naming templates successfully saved."
 
-    @staticmethod
-    def listBuiltinImageNamingTemplates() -> List[NamingTemplate]:
-        return list(NamingTemplates.builtinImageNamingTemplates.values())
+    def listCustoms(self, kind: TemplateType) -> List[NamingTemplate]:
+        if kind == TemplateType.IMAGE:
+            return list(self.image.values())
+        else:
+            assert kind == TemplateType.DESTINATION
+            return list(self.destination.values())
 
-    @staticmethod
-    def listBuiltinDestinationNamingTemplates():
-        return list(NamingTemplates.builtinDestinationNamingTemplates)
-
-    def listCustomImageNamingTemplates(self) -> List[NamingTemplate]:
-        return list(self.image.values())
-
-    def listCustomDestinationNamingTemplates(self):
-        return list(self.destination)
-
-    def addCustomImageNamingTemplate(self, name: str, template: Tuple[Token, ...]) -> NamingTemplate:
+    def add(
+            self,
+            kind: TemplateType,
+            name: str, template: Tuple[Token, ...]
+    ) -> NamingTemplate:
         key = f"TPL_{id(name)}"
         namingTemplate = NamingTemplate(key, name, template)
         namingTemplate.isBuiltin = False
-        self.image[key] = namingTemplate
+        if kind == TemplateType.IMAGE:
+            self.image[key] = namingTemplate
+        else:
+            assert kind == TemplateType.DESTINATION
+            self.destination[key] = namingTemplate
         return namingTemplate
 
-    def deleteCustomImageNamingTemplate(self, templateKey: str):
-        del self.image[templateKey]
+    def delete(self, kind: TemplateType, templateKey: str) -> None:
+        if kind == TemplateType.IMAGE:
+            del self.image[templateKey]
+        else:
+            assert kind == TemplateType.DESTINATION
+            del self.destination[templateKey]
 
-    def changeCustomImageNamingTemplate(self, templateKey: str, template: Tuple[Token, ...]):
-        self.image[templateKey].template = template
+    def change(
+            self,
+            kind: TemplateType,
+            templateKey: str,
+            template: Tuple[Token, ...]
+    ) -> NamingTemplate:
+        if kind == TemplateType.IMAGE:
+            namingTemplate = self.image[templateKey]
+            # self.image[templateKey].template = template
+        else:
+            assert kind == TemplateType.DESTINATION
+            namingTemplate = self.destination[templateKey]
+            # self.destination[templateKey].template = template
+        namingTemplate.template = template
+        return namingTemplate
 
-    def addCustomDestinationNamingTemplate(self, template: NamingTemplate):
-        self.destination[template.key] = template
-
-    def deleteCustomDestinationNamingTemplate(self, templateKey: str):
-        del self.destination[templateKey]
-
-    def getImageNamingTemplateByKey(self, key: str) -> Optional[NamingTemplate]:
-        try:
-            template = NamingTemplates.builtinImageNamingTemplates[key]
-        except KeyError:
+    def getByKey(self, kind: TemplateType, key: str) -> Optional[NamingTemplate]:
+        if kind == TemplateType.IMAGE:
             try:
-                template = self.image[key]
+                template = NamingTemplates.builtinImageNamingTemplates[key]
             except KeyError:
-                template = None
+                try:
+                    template = self.image[key]
+                except KeyError:
+                    template = None
+
+        else:
+            assert kind == TemplateType.DESTINATION
+            try:
+                template = NamingTemplates.builtinDestinationNamingTemplates[key]
+            except KeyError:
+                try:
+                    template = self.destination[key]
+                except KeyError:
+                    template = None
+
         return template
+
+    def getDefault(self, kind: TemplateType) -> NamingTemplate:
+        if kind == TemplateType.IMAGE:
+            return self.builtinImageNamingTemplates[self.defaultImageNamingTemplate]
+        else:
+            assert kind == TemplateType.DESTINATION
+            return self.builtinDestinationNamingTemplates[self.defaultDestinationNamingTemplate]

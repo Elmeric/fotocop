@@ -34,6 +34,7 @@ from .pathselector import PathSelector, DirectorySelector, FileSelector
 from .autocompletetextedit import AutoCompleteTextEdit
 from .collapsiblewidget import CollapsibleWidget
 from .framewidget import QFramedWidget
+from .panelview import QPanelView
 
 
 def autoLayoutWithLabel(
@@ -137,6 +138,41 @@ def reconnect(signal, newSlot=None, oldSlot=None):
         pass
     if newSlot is not None:
         signal.connect(newSlot)
+
+
+def standardFontSize(shrinkOnOdd: bool = True) -> int:
+    h = QtGui.QFontMetrics(QtGui.QFont()).height()
+    if h % 2 == 1:
+        if shrinkOnOdd:
+            h -= 1
+        else:
+            h += 1
+    return h
+
+
+def scaledIcon(path: str, size: Optional[QtCore.QSize] = None) -> QtGui.QIcon:
+    """Create a QIcon that scales well.
+
+    Args:
+        path: path to the icon file.
+        size: target size for the icon.
+
+    Returns:
+        The scaled icon
+    """
+    i = QtGui.QIcon()
+    if size is None:
+        s = standardFontSize()
+        size = QtCore.QSize(s, s)
+    i.addFile(path, size)
+    return i
+
+
+def setElidedText(label: QtWidgets.QLabel, text: str):
+    fm = label.fontMetrics()
+    width = label.width() - 2
+    elidedText = fm.elidedText(text, QtCore.Qt.ElideMiddle, width)
+    label.setText(elidedText)
 
 
 class MyAppStyle(QtWidgets.QProxyStyle):

@@ -4,42 +4,16 @@ import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
+from fotocop.util import qtutil as QtUtil
+
 __all__ = ["SplashScreen"]
-
-
-def standardFontSize(shrinkOnOdd: bool = True) -> int:
-    h = QtGui.QFontMetrics(QtGui.QFont()).height()
-    if h % 2 == 1:
-        if shrinkOnOdd:
-            h -= 1
-        else:
-            h += 1
-    return h
-
-
-def scaledIcon(path: str, size: Optional[QtCore.QSize] = None) -> QtGui.QIcon:
-    """Create a QIcon that scales well.
-
-    Args:
-        path: path to the icon file.
-        size: target size for the icon.
-
-    Returns:
-        The scaled icon
-    """
-    i = QtGui.QIcon()
-    if size is None:
-        s = standardFontSize()
-        size = QtCore.QSize(s, s)
-    i.addFile(path, size)
-    return i
 
 
 class SplashScreen(QtWidgets.QSplashScreen):
     def __init__(self, iconPath: str, version: str, flags) -> None:
         # Use QIcon to render, so we get the high DPI version automatically
         size = QtCore.QSize(600, 400)
-        pixmap = scaledIcon(iconPath, size).pixmap(size)
+        pixmap = QtUtil.scaledIcon(iconPath, size).pixmap(size)
         super().__init__(pixmap, flags)
         self._version = version
         self._progress = 0

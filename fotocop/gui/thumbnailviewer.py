@@ -1,20 +1,21 @@
 import logging
 from enum import IntEnum
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, List, Dict, Optional, cast
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
+from fotocop.util.rangeutil import runs
 from fotocop.models import settings as Config
-from fotocop.models.sources import Selection
+from fotocop.models.sources import Selection, ImageProperty
 from fotocop.models.timeline import TimeRange
 from .timelineviewer import tlv
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import Image
+    from fotocop.models.sources import ImageKey, Image
 
 logger = logging.getLogger(__name__)
 
@@ -27,70 +28,105 @@ CELL_MARGIN = 2
 CELL_IN_WIDTH = 160
 CELL_IN_HEIGHT = 190
 CELL_IN_MARGIN = (CELL_IN_WIDTH - THUMB_WIDTH) / 2
-CELL_WIDTH = CELL_IN_WIDTH + 2*CELL_MARGIN
-CELL_HEIGHT = CELL_IN_HEIGHT + 2*CELL_MARGIN
+CELL_WIDTH = CELL_IN_WIDTH + 2 * CELL_MARGIN
+CELL_HEIGHT = CELL_IN_HEIGHT + 2 * CELL_MARGIN
 THUMB_MARGIN = (CELL_IN_WIDTH - THUMB_HEIGHT) / 2
 
 
 class ImageModel(QtCore.QAbstractListModel):
-
     class UserRoles(IntEnum):
         ThumbnailRole = QtCore.Qt.UserRole + 1
         DateTimeRole = QtCore.Qt.UserRole + 2
         SessionRole = QtCore.Qt.UserRole + 3
+        PreviouslyDownloadedRole = QtCore.Qt.UserRole + 4
 
-    def __init__(self, images: List["Image"] = None, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.images = images or list()
+        self._sourceSelection: Optional["Selection"] = None
+        self._images: List["ImageKey"] = list()
+        self.sessionRequired = False
 
     def rowCount(self, parent: QtCore.QModelIndex = QtCore.QModelIndex()) -> int:
-        return len(self.images)
+        return len(self._images)
 
-    def flags(self, index):
+    def flags(self, index: QtCore.QModelIndex) -> QtCore.Qt.ItemFlags:
         if index.isValid():
-            return super().flags(index) | QtCore.Qt.ItemIsUserCheckable         # noqa
+            return super().flags(index) | QtCore.Qt.ItemIsUserCheckable  # noqa
         return super().flags(index)
 
     def data(self, index: QtCore.QModelIndex, role: int = QtCore.Qt.DisplayRole) -> Any:
-        if not index.isValid():
-            return None
-
-        row = index.row()
-        images = self.images
-        if row < 0 or row >= len(images):
+        imageKey = self._imageKeyFromIndex(index)
+        if imageKey is None:
             return None
 
         if role == QtCore.Qt.DisplayRole:
-            return images[row].name
+            return self._sourceSelection.getImageProperty(imageKey, ImageProperty.NAME)
 
         if role == ImageModel.UserRoles.ThumbnailRole:
-            return images[row].getThumbnail()
+            return self._sourceSelection.getImageProperty(
+                imageKey, ImageProperty.THUMBNAIL
+            )
 
         if role == ImageModel.UserRoles.DateTimeRole:
-            datetime_ = images[row].datetime
-            if datetime_:
-                return tuple([int(e) for e in datetime_])
-            else:
-                return None
+            return self._sourceSelection.getImageProperty(
+                imageKey, ImageProperty.DATETIME
+            )
 
         if role == ImageModel.UserRoles.SessionRole:
-            return images[row].session
+            return self._sourceSelection.getImageProperty(
+                imageKey, ImageProperty.SESSION
+            )
+
+        if role == ImageModel.UserRoles.PreviouslyDownloadedRole:
+            return self._sourceSelection.getImageProperty(
+                imageKey, ImageProperty.DOWNLOAD_INFO
+            ).isPreviouslyDownloaded
 
         if role == QtCore.Qt.ToolTipRole:
-            image = images[row]
-            datetime_ = image.datetime
-            session = image.session
+            sourceSelection = self._sourceSelection
+            name = sourceSelection.getImageProperty(imageKey, ImageProperty.NAME)
+            datetime_ = sourceSelection.getImageProperty(
+                imageKey, ImageProperty.DATETIME
+            )
+            downloadInfo = sourceSelection.getImageProperty(
+                imageKey, ImageProperty.DOWNLOAD_INFO
+            )
             if datetime_:
-                year, month, day, hour, minute, second = datetime_
-                if session:
-                    return f"{year}{month}{day}-{hour}{minute}{second}\n{session}"
-                return f"{year}{month}{day}-{hour}{minute}{second}"
+                takenOn = datetime_.strftime("%a %d %b %Y %I:%M:%S %p")
             else:
-                return None
+                takenOn = ""
+            session = sourceSelection.getImageProperty(imageKey, ImageProperty.SESSION)
+            isSelected = sourceSelection.getImageProperty(
+                imageKey, ImageProperty.IS_SELECTED
+            )
+
+            tip = f"<b>{name}</b><br>Taken on {takenOn}"
+
+            previouslyDownloaded = downloadInfo.isPreviouslyDownloaded
+            if previouslyDownloaded:
+                downloadPath = downloadInfo.downloadPath
+                downloadTime = downloadInfo.downloadTime.strftime(
+                    "%a %d %b %Y %I:%M:%S %p"
+                )
+                if downloadPath != ".":
+                    downloadName = Path(downloadPath).name
+                    downloadPath = Path(downloadPath).parent
+                    tip += f"<br><br>Previously downloaded as:<br>{downloadName}<br>{downloadPath}<br>{downloadTime}"
+                else:
+                    tip += f"<br><br><i>Manually set as previously downloaded on {downloadTime}</i>"
+
+            if session:
+                tip += f"<br><br>Session: {session}"
+            elif self.sessionRequired and isSelected:
+                tip += f"<br><br><i>A session is required!</i>"
+
+            return tip
 
         if role == QtCore.Qt.CheckStateRole:
-            if images[row].isSelected:
+            if self._sourceSelection.getImageProperty(
+                imageKey, ImageProperty.IS_SELECTED
+            ):
                 return QtCore.Qt.Checked
             else:
                 return QtCore.Qt.Unchecked
@@ -105,58 +141,134 @@ class ImageModel(QtCore.QAbstractListModel):
 
         row = index.row()
         if role == QtCore.Qt.CheckStateRole:
-            image = self.images[row]
-            image.isSelected = True if value == QtCore.Qt.Checked else False
+            imageKey = self._images[row]
+            self._sourceSelection.markImagesAsSelected([imageKey], True if value == QtCore.Qt.Checked else False)
             self.dataChanged.emit(index, index, (role,))
             return True
 
         if role == ImageModel.UserRoles.SessionRole:
-            self.images[row].session = value
+            imageKey = self._images[row]
+            self._sourceSelection.setImagesSession([imageKey], value)
+            self.dataChanged.emit(index, index, (role,))
+            return True
+
+        if role == ImageModel.UserRoles.PreviouslyDownloadedRole:
+            imageKey = self._images[row]
+            self._sourceSelection.markImagesAsPreviouslyDownloaded([(imageKey, None, None)])
             self.dataChanged.emit(index, index, (role,))
             return True
 
         return False
 
-    def clearImages(self):
+    def setSourceSelection(self, selection: "Selection") -> None:
+        self._sourceSelection = selection
+
+    def clearImages(self) -> None:
         self.beginResetModel()
-        self.images = list()
+        self._images = list()
         self.endResetModel()
 
-    def addImages(self, images: List["Image"]):
+    def addImages(self, images: List["ImageKey"]):
         row = self.rowCount()
         self.beginInsertRows(QtCore.QModelIndex(), row, row + len(images) - 1)
-        self.images.extend(images)
+        self._images.extend(images)
         self.endInsertRows()
 
-    def updateImage(self, imageKey: str):
-        found = False
-        row = -1
-        for row, image in enumerate(self.images):
-            if image.path == imageKey:
-                found = True
-                break
-        if found:
-            index = self.index(row, 0)
+    def updateImage(self, imageKey: "ImageKey") -> None:
+        index = self._indexFromImageKey(imageKey)
+        if index.isValid():
             self.dataChanged.emit(
                 index,
                 index,
-                (ImageModel.UserRoles.ThumbnailRole, ImageModel.UserRoles.DateTimeRole)
+                (ImageModel.UserRoles.ThumbnailRole, ImageModel.UserRoles.DateTimeRole),
             )
+
+    def setDataRange(
+        self,
+        selection: List[QtCore.QModelIndex],
+        value: Any,
+        role: int = QtCore.Qt.EditRole,
+    ) -> bool:
+        rows = list()
+        imageKeys = list()
+        imagesInfo = list()
+        for index in selection:
+            row = index.row()
+            rows.append(row)
+            imageKeys.append(self._images[row])
+            imagesInfo.append((self._images[row], None, None))
+
+        if imageKeys:
+            if role == QtCore.Qt.CheckStateRole:
+                self._sourceSelection.markImagesAsSelected(imageKeys, value)
+
+            elif role == ImageModel.UserRoles.SessionRole:
+                self._sourceSelection.setImagesSession(imageKeys, value)
+
+            elif role == ImageModel.UserRoles.PreviouslyDownloadedRole:
+                self._sourceSelection.markImagesAsPreviouslyDownloaded(imagesInfo)
+            else:
+                return False
+
+        rows.sort()
+        for first, last in runs(rows):
+            self.dataChanged.emit(self.index(first, 0), self.index(last, 0), (role,))
+        return True
+
+    def selectedImagesCount(self) -> int:
+        sourceSelection = self._sourceSelection
+        if sourceSelection is None:
+            return 0
+
+        return sourceSelection.selectedImagesCount
+
+    def _imageKeyFromIndex(self, index: QtCore.QModelIndex) -> Optional["ImageKey"]:
+        if not index.isValid():
+            return None
+
+        row = index.row()
+        if row < 0 or row >= self.rowCount():
+            return None
+
+        return self._images[row]
+
+    def _indexFromImageKey(self, imageKey: "ImageKey") -> QtCore.QModelIndex:
+        try:
+            row = self._images.index(imageKey)
+        except ValueError:
+            return QtCore.QModelIndex()
+        else:
+            return self.index(row, 0)
 
 
 class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
+
         resources = Config.fotocopSettings.resources
-        self.dummyImage = QtGui.QPixmap(f"{resources}/dummy-image.png")
+        self._dummyImage = QtGui.QPixmap(f"{resources}/dummy-image.png")
 
-    def paint(self, painter, option, index):
+        self.sessionRequired = False
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionViewItem,
+        index: QtCore.QModelIndex,
+    ) -> None:
+        # Retrieves image properties.
         imageName = index.data(QtCore.Qt.DisplayRole)
-        imageThumb, aspectRatio, orientation = index.data(ImageModel.UserRoles.ThumbnailRole)
-        # imageThumb, aspectRatio, orientation = index.data(QtCore.Qt.UserRole)
+        imageSession = index.data(ImageModel.UserRoles.SessionRole)
+        imageIsSelected = index.data(QtCore.Qt.CheckStateRole) == QtCore.Qt.Checked
+        imageThumb, aspectRatio, orientation = index.data(
+            ImageModel.UserRoles.ThumbnailRole
+        )
+        previouslyDownloaded = index.data(ImageModel.UserRoles.PreviouslyDownloadedRole)
 
+        # Build the image pixmap: a portrait dummy image when the image thumbnail is
+        # not yet loaded, the loaded thumbnail with the correct orientation otherwise.
         if imageThumb == "loading":
-            px = self.dummyImage
+            px = self._dummyImage
             px = px.scaledToWidth(THUMB_WIDTH)
         else:
             px = QtGui.QPixmap()
@@ -165,6 +277,8 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
             rm = QtGui.QTransform().rotate(orientation)
             px = px.transformed(rm)
 
+        # Build rect for the pixmap source and target with the correct aspect ratio
+        # and orientation.
         rect = option.rect
         cellLeft = rect.left() + CELL_MARGIN
         cellTop = rect.top() + CELL_MARGIN
@@ -209,27 +323,70 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
             source = landscapeSource
             target = landscapeTarget
 
+        # Build rect for the image name and the whole cell.
         textRect = QtCore.QRect(
             cellLeft, cellTop + CELL_IN_WIDTH, CELL_IN_WIDTH, CAPTION_HEIGHT
         )
         cellRect = QtCore.QRect(cellLeft, cellTop, CELL_IN_WIDTH, CELL_IN_HEIGHT)
 
+        # Add dimming on the image pixmap when previously downloaded and not selected.
+        if (
+            previouslyDownloaded
+            and not imageIsSelected
+            # and download_status == DownloadStatus.not_downloaded
+        ):
+            disabled = QtGui.QPixmap(px.size())
+            disabled.setDevicePixelRatio(px.devicePixelRatioF())
+            disabled.fill(QtCore.Qt.transparent)
+            p = QtGui.QPainter(disabled)
+            p.setBackgroundMode(QtCore.Qt.TransparentMode)
+            p.setBackground(QtGui.QBrush(QtCore.Qt.transparent))
+            p.eraseRect(px.rect())
+            p.setOpacity(0.5)
+            p.drawPixmap(0, 0, px)
+            p.end()
+            px = disabled
+
         defaultPen = painter.pen()
 
+        # Paint the cell background: color depends on its selection state.
         state = index.data(QtCore.Qt.CheckStateRole)
-        bgdColor = QtGui.QColor("aliceblue") if state == QtCore.Qt.Checked else QtGui.QColor("lightgray")
-
+        bgdColor = (
+            QtGui.QColor("aliceblue")
+            if state == QtCore.Qt.Checked
+            else QtGui.QColor("lightgray")
+        )
         painter.fillRect(cellRect, bgdColor)
 
+        # Draw the image pixmap and name.
         painter.drawPixmap(target, px, source)
         painter.drawText(textRect, QtCore.Qt.AlignCenter, imageName)
 
+        # Draw a caution flag for selected images without a session when required.
+        if self.sessionRequired and imageIsSelected and not imageSession:
+            sessionRect = QtCore.QRect(
+                rect.left() + CELL_IN_WIDTH - CAPTION_HEIGHT,
+                cellTop,
+                CAPTION_HEIGHT,
+                CAPTION_HEIGHT,
+            )
+            font = painter.font()
+            fontSize = font.pointSize()
+            font.setPointSize(fontSize + 4)
+            pen = QtGui.QPen(QtGui.QColor("darkorange"), 2)
+            painter.setPen(pen)
+            painter.setFont(font)
+            painter.drawText(sessionRect, QtCore.Qt.AlignCenter, "\u26A0")  # /!\
+            font.setPointSize(fontSize)
+            painter.setFont(font)
+
+        # Draw a border around the image pixmap and the whole cell.
         pen = QtGui.QPen(QtGui.QColor("gray"), 2)
         painter.setPen(pen)
         painter.drawRect(target)
-
         painter.drawRect(cellRect)
 
+        # Overload the border the image pixmap when image is selected
         if option.state & QtWidgets.QStyle.State_Selected:
             pen = QtGui.QPen(QtGui.QColor("deepskyblue"), 3)
             painter.setPen(pen)
@@ -237,7 +394,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.setPen(defaultPen)
 
-        # Check state
+        # Draw the image check state
         # https://stackoverflow.com/questions/57793643/position-qcheckbox-top-left-of-item-in-qlistview
         if state is not None:
             opt = QtWidgets.QStyleOptionViewItem()
@@ -254,8 +411,15 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
                 QtWidgets.QStyle.PE_IndicatorViewItemCheck, opt, painter, None
             )
 
-    def editorEvent(self, event, model, option, index):
-        flags = model.flags(index)
+    def editorEvent(
+        self,
+        event: QtCore.QEvent,
+        model: "ImageModel",
+        option: QtWidgets.QStyleOptionViewItem,
+        index: QtCore.QModelIndex,
+    ) -> bool:
+        flags = cast(int, model.flags(index))
+        # Filter items that are not enabled or not checkable.
         if (
             not (flags & QtCore.Qt.ItemIsUserCheckable)
             or not (option.state & QtWidgets.QStyle.State_Enabled)
@@ -263,15 +427,19 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         ):
             return False
 
+        # Filter items with undefined check state.
         state = index.data(QtCore.Qt.CheckStateRole)
         if state is None:
             return False
 
+        # Filter mouse button press or double-clicked outside the checkbox, key
+        # events that are not a check state key and or all non mouse or key events.
         if event.type() in (
             QtCore.QEvent.MouseButtonRelease,
             QtCore.QEvent.MouseButtonDblClick,
             QtCore.QEvent.MouseButtonPress,
         ):
+            event: QtGui.QMouseEvent
             viewOpt = QtWidgets.QStyleOptionViewItem(option)
             self.initStyleOption(viewOpt, index)
             checkRect = self.getCheckboxRect(viewOpt.rect)
@@ -283,9 +451,10 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
                 QtCore.QEvent.MouseButtonPress,
                 QtCore.QEvent.MouseButtonDblClick,
             ):
-                # Pass event forward to handle normal item selection
+                # Pass event forward to handle normal item selection.
                 return False
         elif event.type() == QtCore.QEvent.KeyPress:
+            event: QtGui.QKeyEvent
             if event.key() not in (QtCore.Qt.Key_Space, QtCore.Qt.Key_Select):
                 return False
         else:
@@ -300,6 +469,8 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
                 QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
             )
         model.setData(index, state, QtCore.Qt.CheckStateRole)
+
+        # Pass key press event forward to handle normal key action.
         if event.type() == QtCore.QEvent.KeyPress:
             return False
         else:
@@ -309,7 +480,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
     def getCheckboxRect(rect: QtCore.QRect) -> QtCore.QRect:
         return QtCore.QRect(4, 4, 18, 18).translated(rect.topLeft())
 
-    def sizeHint(self, QStyleOptionViewItem, QModelIndex):
+    def sizeHint(self, QStyleOptionViewItem, QModelIndex) -> QtCore.QSize:
         return QtCore.QSize(CELL_WIDTH, CELL_HEIGHT)
 
 
@@ -320,8 +491,6 @@ class ThumbnailViewer(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._sourceSelection = None
-
         resources = Config.fotocopSettings.resources
 
         iconSize = QtCore.QSize(24, 24)
@@ -329,20 +498,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
 
         self.logger = logging.getLogger(__name__)
 
-        # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         self.thumbnailView = ThumbnailView()
-        self.thumbnailView.setViewMode(QtWidgets.QListView.IconMode)
-        self.thumbnailView.setWrapping(True)
-        self.thumbnailView.setMovement(QtWidgets.QListView.Static)
-        self.thumbnailView.setResizeMode(QtWidgets.QListView.Adjust)
-        self.thumbnailView.setLayoutMode(QtWidgets.QListView.SinglePass)
-        self.thumbnailView.setGridSize(QtCore.QSize(CELL_WIDTH, CELL_HEIGHT))
-        self.thumbnailView.setUniformItemSizes(True)
-        self.thumbnailView.setMinimumWidth(4*CELL_WIDTH + 24)
-        self.thumbnailView.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
-        )
-
         self.thumbnailView.setItemDelegate(ThumbnailDelegate())
 
         proxyModel = ThumbnailFilterProxyModel()
@@ -350,29 +506,33 @@ class ThumbnailViewer(QtWidgets.QWidget):
         proxyModel.setSourceModel(self._imageModel)
         self.thumbnailView.setModel(proxyModel)
 
-        self.toolbar = QtWidgets.QToolBar('Flow chain tools')
+        self.toolbar = QtWidgets.QToolBar("Thumbnails tools")
         interToolsSpacing = 4
 
-        selectWidget = QtWidgets.QWidget()
-        self.allBtn = QtWidgets.QPushButton("All")
-        self.allBtn.setToolTip("Select all images")
-        self.allBtn.setStatusTip("Select all images")
-        self.noneBtn = QtWidgets.QPushButton("None")
-        self.noneBtn.setToolTip("Deselect all images")
-        self.noneBtn.setStatusTip("Deselect all images")
+        self.selectWidget = QtWidgets.QWidget()
+        allBtn = QtWidgets.QPushButton("All")
+        allBtn.setToolTip("Select all images")
+        allBtn.setStatusTip("Select all images")
+        noneBtn = QtWidgets.QPushButton("None")
+        noneBtn.setToolTip("Deselect all images")
+        noneBtn.setStatusTip("Deselect all images")
         selectLayout = QtWidgets.QHBoxLayout()
         selectLayout.setContentsMargins(0, 0, interToolsSpacing, 0)
-        selectLayout.addWidget(self.allBtn)
-        selectLayout.addWidget(self.noneBtn)
-        selectWidget.setLayout(selectLayout)
+        selectLayout.addWidget(allBtn)
+        selectLayout.addWidget(noneBtn)
+        self.selectWidget.setLayout(selectLayout)
 
         filterWidget = QtWidgets.QWidget()
+        self.newChk = QtWidgets.QCheckBox()
+        self.newChk.setText("New only")
+        self.newChk.setToolTip("Mask images previously downloaded")
+        self.newChk.setStatusTip("Mask images previously downloaded")
         self.filterBtn = QtWidgets.QToolButton()
         self.filterBtn.setIconSize(iconSize)
         self.filterBtn.setIcon(filterIcon)
         self.filterBtn.setCheckable(True)
-        self.filterBtn.setToolTip('Filter images by selecting dates in the timeline')
-        self.filterBtn.setStatusTip('Filter images by selecting dates in the timeline')
+        self.filterBtn.setToolTip("Filter images by selecting dates in the timeline")
+        self.filterBtn.setStatusTip("Filter images by selecting dates in the timeline")
         self.selStatusLbl = QtWidgets.QLabel("")
         filterLayout = QtWidgets.QHBoxLayout()
         filterLayout.setContentsMargins(interToolsSpacing, 0, interToolsSpacing, 0)
@@ -387,17 +547,17 @@ class ThumbnailViewer(QtWidgets.QWidget):
         # First character shall be a latin capital letter or _
         # refer to https://www.ascii-code.com/ and https://regex101.com/library/g6gJyf
         validator = QtGui.QRegularExpressionValidator(
-            QtCore.QRegularExpression(
-                r"^[A-ZÀ-ÖØ-Þ_][0-9A-Za-zÀ-ÖØ-öø-ÿ &',_-]*$"
-            )
+            QtCore.QRegularExpression(r"^[A-ZÀ-ÖØ-Þ_][0-9A-Za-zÀ-ÖØ-öø-ÿ &',_-]*$")
         )
         self.sessionTxt.setValidator(validator)
         self.applySessionBtn = QtWidgets.QPushButton("Apply")
+        self.removeSessionBtn = QtWidgets.QPushButton("Remove")
         sessionLayout = QtWidgets.QHBoxLayout()
         sessionLayout.setContentsMargins(interToolsSpacing, 0, interToolsSpacing, 0)
         sessionLayout.addWidget(self.sessionLbl)
         sessionLayout.addWidget(self.sessionTxt)
         sessionLayout.addWidget(self.applySessionBtn)
+        sessionLayout.addWidget(self.removeSessionBtn)
         sessionWidget.setLayout(sessionLayout)
 
         spacer = QtWidgets.QWidget(self)
@@ -410,7 +570,9 @@ class ThumbnailViewer(QtWidgets.QWidget):
             self.zoomLevelSelector.addItem(z.name, z)
         self.zoomLevelSelector.setCurrentText(tlv.DEFAULT_ZOOM_LEVEL.name)
 
-        self.toolbar.addWidget(selectWidget)
+        self.toolbar.addWidget(self.newChk)
+        self.toolbar.addSeparator()
+        self.toolbar.addWidget(self.selectWidget)
         self.toolbar.addSeparator()
         self.toolbar.addWidget(filterWidget)
         self.toolbar.addSeparator()
@@ -419,23 +581,29 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.toolbar.addWidget(self.zoomLevelSelector)
 
         hlayout = QtWidgets.QHBoxLayout()
+        hlayout.setContentsMargins(0, 0, 0, 0)
         hlayout.addWidget(self.toolbar)
 
         layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(5, 0, 5, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.thumbnailView)
         layout.addLayout(hlayout)
         self.setLayout(layout)
 
-        self.thumbnailView.model().dataChanged.connect(self.onImageModelChanged)
+        self.thumbnailView.model().sourceModel().dataChanged.connect(
+            self.onImageModelChanged
+        )
         self.thumbnailView.selectionModel().selectionChanged.connect(
             self.onSelectionChanged
         )
-        self.allBtn.clicked.connect(
-            lambda: self.setSelected(QtCore.Qt.Checked)
+        allBtn.clicked.connect(
+            lambda: self.thumbnailView.setSelected(QtCore.Qt.Checked)
         )
-        self.noneBtn.clicked.connect(
-            lambda: self.setSelected(QtCore.Qt.Unchecked)
+        noneBtn.clicked.connect(
+            lambda: self.thumbnailView.setSelected(QtCore.Qt.Unchecked)
         )
+        self.newChk.toggled.connect(self.toggleNewOnly)
         self.filterBtn.toggled.connect(self.toggleFilter)
         self.zoomLevelSelector.activated.connect(
             lambda: self.zoomLevelChanged.emit(self.zoomLevelSelector.currentData())
@@ -443,103 +611,115 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.sessionTxt.textEdited.connect(self.checkSession)
         self.sessionTxt.returnPressed.connect(self.applySession)
         self.applySessionBtn.clicked.connect(self.applySession)
+        self.removeSessionBtn.clicked.connect(self.removeSession)
 
-        self.allBtn.setEnabled(False)
-        self.noneBtn.setEnabled(False)
+        self.selectWidget.setEnabled(False)
+        self.newChk.setChecked(True)
+        self.newChk.setEnabled(False)
         self.filterBtn.setChecked(False)
         self.filterBtn.setEnabled(False)
         self.selStatusLbl.hide()
         self.applySessionBtn.setEnabled(False)
+        self.removeSessionBtn.setEnabled(False)
         self.zoomLevelSelector.setEnabled(False)
 
     @QtCore.pyqtSlot(Selection)
-    def setSourceSelection(self, selection):
-        self._sourceSelection = selection
+    def setSourceSelection(self, selection: "Selection") -> None:
+        proxy = self.thumbnailView.model()
+        model = proxy.sourceModel()
+        # Register the source selection in the model and clear it.
+        model.setSourceSelection(selection)
+        model.clearImages()
+        # Reset the time range filter to the default "full time" range.
+        proxy.setTimeRangeFilter([TimeRange()])
+
+        # Hide or disable all the toolbar widget.
+        self.selectWidget.setEnabled(False)
+        self.newChk.setEnabled(False)
         self.filterBtn.setChecked(False)
-        self.thumbnailView.model().sourceModel().clearImages()
-        self.thumbnailView.model().setTimeRangeFilter([TimeRange()])
-        self.allBtn.setEnabled(False)
-        self.noneBtn.setEnabled(False)
         self.filterBtn.setEnabled(False)
         self.selStatusLbl.hide()
         self.zoomLevelSelector.setEnabled(False)
 
     @QtCore.pyqtSlot(dict)
-    def addImages(self, images):
-        images = list(images.values())
+    def addImages(self, images: Dict["ImageKey", "Image"]) -> None:
+        images = list(images)
         self.thumbnailView.model().sourceModel().addImages(images)
-        self.allBtn.setEnabled(True)
-        self.noneBtn.setEnabled(True)
+        self.selectWidget.setEnabled(True)
+        self.newChk.setEnabled(True)
 
     @QtCore.pyqtSlot(str)
-    def updateImage(self, imageKey: str):
+    def updateImage(self, imageKey: str) -> None:
         self.thumbnailView.model().sourceModel().updateImage(imageKey)
-
-    def setSelected(self, state: QtCore.Qt.CheckState):
-        proxy = self.thumbnailView.model()
-        model = proxy.sourceModel()
-        for i in range(proxy.rowCount()):
-            proxyIndex = proxy.index(i, 0)
-            model.setData(proxy.mapToSource(proxyIndex), state, QtCore.Qt.CheckStateRole)
-        self._updateSelStatus()
 
     @QtCore.pyqtSlot(QtCore.QModelIndex, QtCore.QModelIndex, "QVector<int>")
     def onImageModelChanged(
-            self,
-            _topleft: QtCore.QModelIndex,
-            _bottomright: QtCore.QModelIndex,
-            roles: List[int]):
-        if QtCore.Qt.CheckStateRole in roles:
-            self._updateSelStatus()
+        self,
+        _topleft: QtCore.QModelIndex,
+        _bottomright: QtCore.QModelIndex,
+        roles: List[int],
+    ) -> None:
+        if (
+            QtCore.Qt.CheckStateRole in roles
+            or ImageModel.UserRoles.PreviouslyDownloadedRole in roles
+        ):
+            self.updateSelStatus()
 
     @QtCore.pyqtSlot(bool)
-    def toggleFilter(self, checked: bool):
+    def toggleNewOnly(self, checked: bool) -> None:
+        self.thumbnailView.model().setIsNewFilterOn(checked)
+        self.updateSelStatus()
+
+    @QtCore.pyqtSlot(bool)
+    def toggleFilter(self, checked: bool) -> None:
         self.thumbnailView.model().setIsDateFilterOn(checked)
-        self._updateSelStatus()
+        self.updateSelStatus()
 
     @QtCore.pyqtSlot(tlv.ZoomLevel)
-    def onZoomLevelChanged(self, zoomLevel: tlv.ZoomLevel):
+    def onZoomLevelChanged(self, zoomLevel: tlv.ZoomLevel) -> None:
         self.zoomLevelSelector.setCurrentText(zoomLevel.name)
 
     @QtCore.pyqtSlot(str, int)
-    def showNodeInfo(self, nodeKey: str, nodeWeight: int):
+    def showNodeInfo(self, nodeKey: str, nodeWeight: int) -> None:
         mainWindow = QtUtil.getMainWindow()
         if nodeKey:
             mainWindow.showStatusMessage(f"{nodeKey}: {nodeWeight} images")
 
     @QtCore.pyqtSlot(list)
-    def updateTimeRange(self, timeRange: List["TimeRange"]):
+    def updateTimeRange(self, timeRange: List["TimeRange"]) -> None:
         if timeRange:
             self.filterBtn.setChecked(True)
         else:
             self.filterBtn.setChecked(False)
-        self.thumbnailView.model().setTimeRangeFilter(timeRange)
-        self._updateSelStatus()
-        self._selectImages()
+        thumbnailView = self.thumbnailView
+        thumbnailView.model().setTimeRangeFilter(timeRange)
+        thumbnailView.selectImages()
+        self.updateSelStatus()
         self.sessionTxt.selectAll()
         self.sessionTxt.setFocus()
 
     @QtCore.pyqtSlot()
-    def activateDateFilter(self):
+    def activateDateFilter(self) -> None:
         self.filterBtn.setChecked(False)
         self.filterBtn.setEnabled(True)
         self.selStatusLbl.show()
         self.zoomLevelSelector.setEnabled(True)
-        self._updateSelStatus()
+        self.updateSelStatus()
 
     @QtCore.pyqtSlot(QtCore.QItemSelection, QtCore.QItemSelection)
-    def onSelectionChanged(self, _selected: QtCore.QItemSelection, _deselected: QtCore.QItemSelection):
-        """Update the session editor text and apply action availability.
-        """
+    def onSelectionChanged(
+        self, _selected: QtCore.QItemSelection, _deselected: QtCore.QItemSelection
+    ):
+        """Update the session editor text and apply action availability."""
         thumbnailView = self.thumbnailView
-        proxy = thumbnailView.model()
-        model = proxy.sourceModel()
         selectedProxyIndexes = thumbnailView.selectionModel().selection().indexes()
         session = self._sessionOfSelectedImages(selectedProxyIndexes)
 
         # In all cases, indicates the selected images count if not null.
         applyCount = f" ({len(selectedProxyIndexes)})" if selectedProxyIndexes else ""
         self.applySessionBtn.setText(f"Apply{applyCount}")
+        self.removeSessionBtn.setText(f"Remove{applyCount}")
+        self.removeSessionBtn.setEnabled(session is not None and session != "")
 
         # Empty selection: cannot apply any session (but leave edited session unchanged if any).
         if session is None:
@@ -547,7 +727,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
             return
 
         editedSession = self.sessionTxt.text()
-        if session == "":
+        if session in ("", "!="):
             # The selected images have empty or different sessions: can apply the edited
             # session if not empty, but select it to ease its modification.
             self.applySessionBtn.setEnabled(editedSession != "")
@@ -575,7 +755,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.applySessionBtn.setEnabled(False)
 
     @QtCore.pyqtSlot(str)
-    def checkSession(self, text: str):
+    def checkSession(self, text: str) -> None:
         selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
         nonEmptySelection = len(selectedProxyIndexes) > 0
 
@@ -588,39 +768,31 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.applySessionBtn.setText(f"Apply{applyCount}")
 
     @QtCore.pyqtSlot()
-    def applySession(self):
-        selectedProxyIndexes = self.thumbnailView.selectionModel().selection().indexes()
-        session = self.sessionTxt.text()
-        proxy = self.thumbnailView.model()
-        model = proxy.sourceModel()
-        # print(f"Applying session {session} on {len(selectedProxyIndexes)} images")
-        for proxyIndex in selectedProxyIndexes:
-            model.setData(
-                proxy.mapToSource(proxyIndex), session, ImageModel.UserRoles.SessionRole
-            )
-        self.thumbnailView.selectionModel().clearSelection()
-        self.sessionTxt.clear()
-        self.applySessionBtn.setEnabled(False)
+    def applySession(self) -> None:
+        self._updateSession(self.sessionTxt.text())
 
-    def _updateSelStatus(self):
-        imagesCount = self.thumbnailView.model().sourceModel().rowCount()
-        imagesShown = self.thumbnailView.model().rowCount()
-        selectedImagesCount = self._sourceSelection.selectedImagesCount
+    @QtCore.pyqtSlot()
+    def removeSession(self) -> None:
+        self._updateSession("")
+
+    @QtCore.pyqtSlot(bool)
+    def requestSession(self, sessionRequired: bool) -> None:
+        self.thumbnailView.requestSession(sessionRequired)
+
+    @QtCore.pyqtSlot()
+    def updateSelStatus(self):
+        proxy = self.thumbnailView.model()
+        proxy.invalidateFilter()
+        model = proxy.sourceModel()
+        imagesCount = model.rowCount()
+        imagesShown = proxy.rowCount()
+        selectedImagesCount = model.selectedImagesCount()
         self.selStatusLbl.setText(
             f"Show {imagesShown} images on {imagesCount}, {selectedImagesCount} are selected"
         )
 
-    def _selectImages(self):
-        thumbnailView = self.thumbnailView
-        proxy = thumbnailView.model()
-        topleft = proxy.index(0, 0)
-        bottomright = proxy.index(proxy.rowCount() - 1, 0)
-        selection = QtCore.QItemSelection(topleft, bottomright)
-        thumbnailView.selectionModel().select(selection, QtCore.QItemSelectionModel.Select)
-
     def _sessionOfSelectedImages(
-            self,
-            selectedProxyIndexes: List[QtCore.QModelIndex]
+        self, selectedProxyIndexes: List[QtCore.QModelIndex]
     ) -> Optional[str]:
         """Get the session of the current images selection.
 
@@ -659,38 +831,82 @@ class ThumbnailViewer(QtWidgets.QWidget):
             # The selected images have all the same non-empty session.
             return session
 
-        # The selected images have empty or different sessions.
+        if session:
+            # The selected images have different sessions.
+            return "!="
+
+        # The selected images have all an empty session.
         return ""
+
+    def _updateSession(self, session: str) -> None:
+        proxy = self.thumbnailView.model()
+        model = proxy.sourceModel()
+
+        selectedIndexes = proxy.mapSelectionToSource(
+            self.thumbnailView.selectionModel().selection()
+        ).indexes()
+
+        model.setDataRange(selectedIndexes, session, ImageModel.UserRoles.SessionRole)
+
+        self.thumbnailView.selectionModel().clearSelection()
+        self.sessionTxt.clear()
+        self.applySessionBtn.setEnabled(False)
 
 
 class ThumbnailView(QtWidgets.QListView):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.possiblyPreserveSelectionPostClick = False
+        self._possiblyPreserveSelectionPostClick = False
+
+        # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
+        self.setViewMode(QtWidgets.QListView.IconMode)
+        self.setWrapping(True)
+        self.setMovement(QtWidgets.QListView.Static)
+        self.setResizeMode(QtWidgets.QListView.Adjust)
+        self.setLayoutMode(QtWidgets.QListView.SinglePass)
+        self.setGridSize(QtCore.QSize(CELL_WIDTH, CELL_HEIGHT))
+        self.setUniformItemSizes(True)
+        self.setMinimumWidth(4 * CELL_WIDTH + 24)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.setContextMenuPolicy(QtCore.Qt.DefaultContextMenu)
+        self.setStyleSheet(
+            f"QListView{{background-color: {QtGui.QColor(240, 240, 240).name()};}}"
+        )
+
+        self.contextMenu = QtWidgets.QMenu()
+        self.markAsDownloadedAct = self.contextMenu.addAction("Mark as Downloaded")
+        self.markAsDownloadedAct.setVisible(True)
+        self.markAsDownloadedAct.setEnabled(False)
+        self.markAsDownloadedAct.triggered.connect(self.markImagesAsDownloaded)
 
     @QtCore.pyqtSlot(QtCore.QItemSelection, QtCore.QItemSelection)
     def selectionChanged(
         self, selected: QtCore.QItemSelection, deselected: QtCore.QItemSelection
-    ):
-        """
-        Reselect items if the user clicked a checkmark within an existing selection
-        :param selected: new selection
-        :param deselected: previous selection
+    ) -> None:
+        """Reselect items if the user clicked a checkmark within an existing selection.
+
+        Args:
+            selected: new selection
+            deselected: previous selection
         """
 
         super().selectionChanged(deselected, selected)
 
-        if self.possiblyPreserveSelectionPostClick:
+        if self._possiblyPreserveSelectionPostClick:
             # Must set this to False before adjusting the selection!
-            self.possiblyPreserveSelectionPostClick = False
+            self._possiblyPreserveSelectionPostClick = False
 
             current = self.currentIndex()
-            if not(len(selected.indexes()) == 1 and selected.indexes()[0] == current):
+            if not (len(selected.indexes()) == 1 and selected.indexes()[0] == current):
                 # Other items than the current one are selected: add the selection to
                 # the deselected items and make the deselected items the new selection.
-                deselected.merge(self.selectionModel().selection(), QtCore.QItemSelectionModel.Select)
-                self.selectionModel().select(deselected, QtCore.QItemSelectionModel.Select)
+                deselected.merge(
+                    self.selectionModel().selection(), QtCore.QItemSelectionModel.Select
+                )
+                self.selectionModel().select(
+                    deselected, QtCore.QItemSelectionModel.Select
+                )
 
     @QtCore.pyqtSlot(QtGui.QMouseEvent)
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -702,8 +918,8 @@ class ThumbnailView(QtWidgets.QListView):
         know about our checkboxes. Therefore, if the user is in fact
         clicking on a checkbox, we need to filter that event.
 
-        On some versions of Qt 5 (to be determined), no matter what we do here,
-        the delegate's editorEvent will still be triggered.
+        Does not apply to the clicked thumbnail as the delegate's editorEvent will still
+        be triggered.
 
         Args:
             event: the mouse click event
@@ -713,71 +929,161 @@ class ThumbnailView(QtWidgets.QListView):
             super().mousePressEvent(event)
 
         else:
-            clickedIndex = self.indexAt(event.pos())
-            clickedRow = clickedIndex.row()
+            clickedProxyIndex = self.indexAt(event.pos())
+            clickedRow = clickedProxyIndex.row()
 
             if clickedRow >= 0:
-                rect = self.visualRect(clickedIndex)
-                delegate = self.itemDelegate(clickedIndex)
+                rect = self.visualRect(clickedProxyIndex)
+                delegate = self.itemDelegate(clickedProxyIndex)
                 checkboxRect = delegate.getCheckboxRect(rect)
                 checkboxClicked = checkboxRect.contains(event.pos())
 
                 if checkboxClicked:
-                    self.possiblyPreserveSelectionPostClick = True
-                    selected = self.selectionModel().selection()
-                    model = self.model()
+                    self._possiblyPreserveSelectionPostClick = True
+                    proxy = self.model()
+                    model = proxy.sourceModel()
+                    selectedIndexes = proxy.mapSelectionToSource(
+                        self.selectionModel().selection()
+                    ).indexes()
+                    clickedIndex = proxy.mapToSource(clickedProxyIndex)
                     state = model.data(clickedIndex, QtCore.Qt.CheckStateRole)
-                    state = QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
-                    if len(selected.indexes()) > 1 and clickedIndex in selected.indexes():
-                        for index in selected.indexes():
-                            if not index == clickedIndex:
-                                model.setData(index, state, QtCore.Qt.CheckStateRole)
+                    if len(selectedIndexes) > 1 and clickedIndex in selectedIndexes:
+                        selection = [
+                            index
+                            for index in selectedIndexes
+                            if not index == clickedIndex
+                        ]
+                        model.setDataRange(
+                            selection,
+                            False if state == QtCore.Qt.Checked else True,
+                            QtCore.Qt.CheckStateRole,
+                        )
 
             super().mousePressEvent(event)
 
     @QtCore.pyqtSlot(QtGui.QKeyEvent)
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-        """
-        Filter selection changes when click is on a thumbnail checkbox.
+        """Allow thumbnails' checkboxes activation with the keyboard.
 
-        When the user has selected multiple items (thumbnails), and
-        then clicks one of the checkboxes, Qt's default behaviour is to
-        treat that click as selecting the single item, because it doesn't
-        know about our checkboxes. Therefore, if the user is in fact
-        clicking on a checkbox, we need to filter that event.
+        As Qt does not know about our checkboxes, this event filter traps the
+        corresponding keys and reproduces the normal key behavior on checkboxes.
 
-        On some versions of Qt 5 (to be determined), no matter what we do here,
-        the delegate's editorEvent will still be triggered.
+        Does not apply to the current thumbnail as the delegate's editorEvent will still
+        be triggered.
 
         Args:
-            event: the mouse click event
+            event: the key event.
         """
-        selectedIndexes = self.selectionModel().selection().indexes()
-        if len(selectedIndexes) < 1 or event.key() not in (QtCore.Qt.Key_Space, QtCore.Qt.Key_Select):
+        proxy = self.model()
+        model = proxy.sourceModel()
+        selectedIndexes = proxy.mapSelectionToSource(
+            self.selectionModel().selection()
+        ).indexes()
+        if len(selectedIndexes) < 1 or event.key() not in (
+            QtCore.Qt.Key_Space,
+            QtCore.Qt.Key_Select,
+        ):
             super().keyPressEvent(event)
 
         else:
-            clickedIndex = self.currentIndex()
-            model = self.model()
+            clickedIndex = proxy.mapToSource(self.currentIndex())
             state = model.data(clickedIndex, QtCore.Qt.CheckStateRole)
-            state = QtCore.Qt.Unchecked if state == QtCore.Qt.Checked else QtCore.Qt.Checked
-            for index in selectedIndexes:
-                if not index == clickedIndex:
-                    model.setData(index, state, QtCore.Qt.CheckStateRole)
+            selection = [
+                index for index in selectedIndexes if not index == clickedIndex
+            ]
+            model.setDataRange(
+                selection,
+                False if state == QtCore.Qt.Checked else True,
+                QtCore.Qt.CheckStateRole,
+            )
 
             super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        """Determine if user can manually mark images as previously downloaded."""
+        notDownloaded = self._oneOrMoreNotDownloaded()
+        self.markAsDownloadedAct.setEnabled(notDownloaded)
+
+        globalPos = self.mapToGlobal(event.pos())
+        self.contextMenu.popup(globalPos)
+
+    def setSelected(self, state: QtCore.Qt.CheckState) -> None:
+        proxy = self.model()
+        model = proxy.sourceModel()
+
+        allIndexes = [
+            proxy.mapToSource(proxy.index(i, 0)) for i in range(proxy.rowCount())
+        ]
+
+        if len(allIndexes) <= 0:
+            return
+
+        model.setDataRange(
+            allIndexes,
+            True if state == QtCore.Qt.Checked else False,
+            QtCore.Qt.CheckStateRole,
+        )
+
+    @QtCore.pyqtSlot()
+    def markImagesAsDownloaded(self) -> None:
+        proxy = self.model()
+        model = proxy.sourceModel()
+
+        selectedIndexes = proxy.mapSelectionToSource(
+            self.selectionModel().selection()
+        ).indexes()
+
+        if len(selectedIndexes) <= 0:
+            return
+
+        model.setDataRange(
+            selectedIndexes, None, ImageModel.UserRoles.PreviouslyDownloadedRole
+        )
+
+    def selectImages(self) -> None:
+        proxy = self.model()
+        topleft = proxy.index(0, 0)
+        bottomright = proxy.index(proxy.rowCount() - 1, 0)
+        selection = QtCore.QItemSelection(topleft, bottomright)
+        self.selectionModel().select(selection, QtCore.QItemSelectionModel.Select)
+
+    def requestSession(self, sessionRequired: bool) -> None:
+        """Set a flag on the item delagate and model to warn that a session is required.
+
+        Args:
+            sessionRequired: True if a session is required by the selected naming
+                template.
+        """
+        self.itemDelegate().sessionRequired = sessionRequired
+        self.model().sourceModel().sessionRequired = sessionRequired
+        self.viewport().repaint()
+
+    def _oneOrMoreNotDownloaded(self) -> bool:
+        selectedIndexes = self.selectedIndexes()
+
+        if selectedIndexes is None:
+            return False
+
+        else:
+            return any(
+                [
+                    not index.data(ImageModel.UserRoles.PreviouslyDownloadedRole)
+                    for index in selectedIndexes
+                ]
+            )
 
 
 class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
 
     _isDateFilterOn: bool = False
     _timeRangeFilter: List["TimeRange"] = [TimeRange()]
+    _isNewFilterOn: bool = False
 
     @classmethod
     def timeRangeFilter(cls) -> List["TimeRange"]:
         return cls._timeRangeFilter
 
-    def setTimeRangeFilter(self, value: List["TimeRange"]):
+    def setTimeRangeFilter(self, value: List["TimeRange"]) -> None:
         if not value:
             value = [TimeRange()]
         ThumbnailFilterProxyModel._timeRangeFilter = value
@@ -787,20 +1093,35 @@ class ThumbnailFilterProxyModel(QtCore.QSortFilterProxyModel):
     def isDateFilterOn(cls) -> bool:
         return cls._isDateFilterOn
 
-    def setIsDateFilterOn(self, value: bool):
+    def setIsDateFilterOn(self, value: bool) -> None:
         ThumbnailFilterProxyModel._isDateFilterOn = value
         self.invalidateFilter()
 
-    def filterAcceptsRow(self, sourceRow: int, sourceParent: QtCore.QModelIndex) -> bool:
-        OkDate = True
+    @classmethod
+    def isNewFilterOn(cls) -> bool:
+        return cls._isNewFilterOn
+
+    def setIsNewFilterOn(self, value: bool) -> None:
+        ThumbnailFilterProxyModel._isNewFilterOn = value
+        self.invalidateFilter()
+
+    def filterAcceptsRow(
+        self, sourceRow: int, sourceParent: QtCore.QModelIndex
+    ) -> bool:
+        okDate = True
+        model = self.sourceModel()
 
         if self.isDateFilterOn():
-            index = self.sourceModel().index(sourceRow, 0, sourceParent)
-            dateTime = self.sourceModel().data(index, ImageModel.UserRoles.DateTimeRole)
+            index = model.index(sourceRow, 0, sourceParent)
+            dateTime = model.data(index, ImageModel.UserRoles.DateTimeRole)
             if dateTime:
-                dateTime = datetime(*dateTime)
-                OkDate = any(
+                okDate = any(
                     [tr.start <= dateTime <= tr.end for tr in self.timeRangeFilter()]
                 )
 
-        return OkDate
+        isNew = True
+        if self.isNewFilterOn():
+            index = model.index(sourceRow, 0, sourceParent)
+            isNew = not model.data(index, ImageModel.UserRoles.PreviouslyDownloadedRole)
+
+        return okDate and isNew

@@ -10,7 +10,7 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Visitor
-from fotocop.models.naming import TokensDescription, Token, NamingTemplates
+from fotocop.models.naming import TemplateType, TokensDescription, Token, NamingTemplates
 
 if TYPE_CHECKING:
     from fotocop.models.naming import TokenTree, TokenFamily, TokenGenus, NamingTemplate
@@ -163,6 +163,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
         """
         key = event.key()
         ctrl = event.modifiers() & QtCore.Qt.ControlModifier  # noqa
+        # shift = event.modifiers() & QtCore.Qt.ShiftModifier  # noqa
 
         if key in (QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return, QtCore.Qt.Key_Tab):
             return
@@ -220,7 +221,7 @@ class TemplateTextEdit(QtWidgets.QTextEdit):
                     self.setTextCursor(cursor)
             return
 
-        if bool(re.match(r"^[a-zA-Z0-9-_]$", event.text())):
+        if bool(re.match(r"^[a-zA-Z0-9-_/]$", event.text())):
             position = cursor.position()
             cursorNeighborhood = self._tokenAtPos(position)
             if cursorNeighborhood.position == CursorPosition.IN:
@@ -544,12 +545,14 @@ class NamingTemplateEditor(QtWidgets.QDialog):
 
 
 class ImageNamingTemplateEditor(NamingTemplateEditor):
-    def __init__(self, downloader: "Downloader", parent=None):
+    def __init__(self, downloader: "Downloader", kind: "TemplateType", parent=None):
         super().__init__(parent=parent)
 
         self._downloader = downloader
+        self._templateKind = kind
 
         self._existingTemplateNames = list()
+        self._templateSaved = True
 
         templateLbl = QtWidgets.QLabel("Preset:")
         self.templateCmb = QtWidgets.QComboBox()
@@ -587,7 +590,7 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         # layout.addWidget(self.messageWidget)
 
         self.tokenSelectorList = NamingTemplates.tokensRootNode.accept(
-            TokenSelectorBuilder()
+            TokenSelectorBuilder(templateKind=kind)
         )
         layout.addWidget(self.tokenSelectorList)
 
@@ -599,7 +602,8 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         self.replaceChk.stateChanged.connect(self._setReplace)
         self.saveBtn.clicked.connect(self._saveTemplate)
         self.templateTextEdit.textChanged.connect(self._checkTemplate)
-        self._downloader.imageSampleChanged.connect(self._updateImageSample)
+        self._downloader.imageSampleChanged.connect(self._updateSample)
+        # self._downloader.destinationSampleChanged.connect(self._updateSample)
 
         self.show()
         self._updateTemplates(isInit=True)
@@ -607,6 +611,10 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
     @property
     def templateName(self) -> str:
         return self.templateCmb.currentText()
+
+    @property
+    def templateKey(self) -> str:
+        return self.templateCmb.currentData()
 
     @property
     def _editedTemplate(self) -> Optional["NamingTemplate"]:
@@ -618,7 +626,8 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         Returns:
             The Namingtemplate object currently selected for edition.
         """
-        template = self._downloader.getImageNamingTemplateByKey(
+        template = self._downloader.getNamingTemplateByKey(
+            self._templateKind,
             self.templateCmb.currentData()
         )
         assert template is not None
@@ -626,12 +635,15 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
 
     @property
     def _isDirty(self) -> bool:
-        return self.templateTextEdit.toPlainText() != self._editedTemplate.asText()
+        return (
+                self.templateTextEdit.toPlainText() != self._editedTemplate.asText()
+                or not self._templateSaved
+        )
 
     def editTemplate(self, key: str):
         # Set the template to be edited: retrieve the selected template from its key
         # and select it to update the dialog state.
-        template = self._downloader.getImageNamingTemplateByKey(key)
+        template = self._downloader.getNamingTemplateByKey(self._templateKind, key)
         assert template is not None
         self._selectTemplate(template)
 
@@ -642,12 +654,12 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
             self.templateCmb.clear()
             self._existingTemplateNames.clear()
 
-            builtins = downloader.listBuiltinImageNamingTemplates()
+            builtins = downloader.listBuiltinNamingTemplates(self._templateKind)
             for template in builtins:
                 self.templateCmb.addItem(template.name, template.key)
                 self._existingTemplateNames.append(template.name)
 
-            customs = downloader.listCustomImageNamingTemplates()
+            customs = downloader.listCustomNamingTemplates(self._templateKind)
             if customs:
                 self.templateCmb.insertSeparator(len(builtins))
             for template in customs:
@@ -691,7 +703,7 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         # The user selects a template in the combo box: retrieve the selected template
         # from its key and select it to update the dialog state.
         key = self.templateCmb.currentData()
-        template = self._downloader.getImageNamingTemplateByKey(key)
+        template = self._downloader.getNamingTemplateByKey(self._templateKind, key)
         assert template is not None
         self._selectTemplate(template)
 
@@ -713,7 +725,7 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
             self.deleteBtn.setEnabled(True)
 
         # set it as the downloader selected template to allow correct sample name.
-        self._downloader.setImageNamingTemplate(template.key)
+        self._downloader.setNamingTemplate(self._templateKind, template.key)
 
     @QtCore.pyqtSlot(int)
     def _setReplace(self, state: int):
@@ -722,11 +734,16 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
         else:
             self.saveBtn.setText("Save As")
 
-    def _updateImageSample(self, name: str):
-        self.example.setText(name)
+    def _updateSample(self, name: str, path: str) -> None:
+        if self._templateKind == TemplateType.IMAGE:
+            self.example.setText(name)
+        else:
+            assert self._templateKind == TemplateType.DESTINATION
+            self.example.setText(path)
 
     @QtCore.pyqtSlot()
     def _saveTemplate(self):
+        template = None
         if not self.replaceChk.isChecked():
             # Save the changed template with a new name (Save As).
             # Query a name for the new template.
@@ -735,33 +752,39 @@ class ImageNamingTemplateEditor(NamingTemplateEditor):
             if dialog.exec_():
                 templateName = dialog.templateName
                 # Command the template creation to the downloader and show command status.
-                template = self._downloader.addCustomImageNamingTemplates(
+                template = self._downloader.addCustomNamingTemplate(
+                    self._templateKind,
                     templateName, self.templateTextEdit.template
                 )
-                success, msg = self._downloader.saveCustomNamingTemplates()
-                QtUtil.getMainWindow().showStatusMessage(msg, not success)
-                # Update content of the template combo box.
-                self._updateTemplates()
-                # Select the new template to update dialog state.
-                self._selectTemplate(template)
         else:
             # Command the template modification to the downloader and show command status.
-            self._downloader.changeCustomImageNamingTemplate(
-                self.templateCmb.currentData(), self.templateTextEdit.template
+            template = self._downloader.changeCustomNamingTemplate(
+                self._templateKind,
+                self.templateCmb.currentData(),
+                self.templateTextEdit.template
             )
+
+        # A template has been added or changed: save it and update the template editor.
+        if template is not None:
             success, msg = self._downloader.saveCustomNamingTemplates()
             QtUtil.getMainWindow().showStatusMessage(msg, not success)
+            self._templateSaved = success
+            # Update content of the template combo box.
+            self._updateTemplates()
+            # Select the new template to update dialog state.
+            self._selectTemplate(template)
 
     @QtCore.pyqtSlot()
     def _deleteTemplate(self):
         # Command the template deletion to the downloader and show command status.
-        self._downloader.deleteCustomImageNamingTemplate(self.templateCmb.currentData())
+        self._downloader.deleteCustomNamingTemplate(self._templateKind, self.templateCmb.currentData())
         success, msg = self._downloader.saveCustomNamingTemplates()
         QtUtil.getMainWindow().showStatusMessage(msg, not success)
         # Update content of the template combo box.
         self._updateTemplates()
         # Select the first template in the combo box to update dialog state.
-        firstTemplate = self._downloader.getImageNamingTemplateByKey(
+        firstTemplate = self._downloader.getNamingTemplateByKey(
+            self._templateKind,
             self.templateCmb.itemData(0)
         )
         assert firstTemplate is not None
@@ -867,12 +890,16 @@ class TokenSelector(QtWidgets.QWidget):
 
 
 class TokenSelectorBuilder(Visitor):
+    def __init__(self, templateKind: TemplateType) -> None:
+        self._templateKind = templateKind
+
     def visitTokenTree(self, tokenTree: "TokenTree"):
         tokenListView = TokenSelectorList()
 
         for tokenNode in tokenTree.children:
-            tokenGroup = tokenNode.accept(self)
-            tokenListView.addTokenGroup(tokenGroup)
+            if tokenNode.isAllowed(self._templateKind):
+                tokenGroup = tokenNode.accept(self)
+                tokenListView.addTokenGroup(tokenGroup)
 
         return tokenListView
 
@@ -881,9 +908,10 @@ class TokenSelectorBuilder(Visitor):
 
         color = TOKEN_COLORS[tokenFamily.name]
         for tokenNode in tokenFamily.children:
-            tokenSelector = tokenNode.accept(self)
-            tokenSelector.setColor(color)
-            tokenGroup.addTokenSelector(tokenSelector)
+            if tokenNode.isAllowed(self._templateKind):
+                tokenSelector = tokenNode.accept(self)
+                tokenSelector.setColor(color)
+                tokenGroup.addTokenSelector(tokenSelector)
 
         return tokenGroup
 

@@ -1,22 +1,24 @@
 import logging
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from pathlib import Path
 from multiprocessing import Process, Event
 from enum import Enum, auto
 
 from fotocop.util.logutil import LogConfig, configureRootLogger
 from fotocop.util.threadutil import StoppableThread
+from fotocop.models.sqlpersistence import DownloadedDB, FileDownloaded
 
 logger = logging.getLogger(__name__)
 
 
 class ScanHandler(StoppableThread):
-    def __init__(self, path: str, subDirs: bool, conn, *args, **kwargs):
+    def __init__(self, path: str, subDirs: bool, conn, db: DownloadedDB, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "StoppableScanHandler"
         self._path = path
         self._subDirs = subDirs
         self._conn = conn
+        self._downloadedDb = db
 
     @property
     def path(self) -> str:
@@ -41,7 +43,15 @@ class ScanHandler(StoppableThread):
                     imagesBatch = list()
                     break
                 if self._isImage(f):
-                    imagesBatch.append((f.name, f.as_posix()))
+                    # previouslyDownloaded = None
+                    previouslyDownloaded = self._isAlreadyDownloaded(f)
+                    if previouslyDownloaded is not None:
+                        downloadPath, downloadTime = previouslyDownloaded
+                    else:
+                        downloadPath, downloadTime = (None, None)
+                    imagesBatch.append(
+                        (f.name, f.as_posix(), downloadPath, downloadTime)
+                    )
                     imagesCount += 1
                     logger.debug(f"Found image: {imagesCount} - {f.name}")
                     if imagesCount % ImageScanner.BATCH_SIZE == 0:
@@ -64,7 +74,14 @@ class ScanHandler(StoppableThread):
     def _isImage(path: Path) -> bool:
         return path.suffix.lower() in (".jpg", ".raf", ".nef", ".dng")
 
-    def _publishImagesBatch(self, batch: int, images: List[Tuple[str, str]]):
+    def _isAlreadyDownloaded(self, imagePath: Path) -> Optional[FileDownloaded]:
+        name = imagePath.name
+        stat = imagePath.stat()
+        size = stat.st_size
+        mtime = stat.st_mtime
+        return self._downloadedDb.fileIsPreviouslyDownloaded(name, size, mtime)
+
+    def _publishImagesBatch(self, batch: int, images: List[Tuple[str, str, str, float]]):
         data = (f"images#{batch}", images)
         try:
             self._conn.send(data)
@@ -90,7 +107,7 @@ class ImageScanner(Process):
         SCAN = auto()   # Start scanning images
         ABORT = auto()  # Abort current scanning
 
-    def __init__(self, conn):
+    def __init__(self, conn, db: DownloadedDB) -> None:
         """
         Create a ImageScanner process instance and save the connection 'conn' to
         the main process.
@@ -107,6 +124,8 @@ class ImageScanner(Process):
         self._exitProcess = Event()
 
         self._scanHandler = None
+
+        self._downloadedDb = db
 
     def run(self):
         """ImageScanner 'main loop'
@@ -146,7 +165,7 @@ class ImageScanner(Process):
                 # Scan images
                 path, subDirs = arg
                 logger.debug(f"Start a new scan handler")
-                self._scanHandler = ScanHandler(path, subDirs, conn)
+                self._scanHandler = ScanHandler(path, subDirs, conn, self._downloadedDb)
                 self._scanHandler.start()
             else:
                 logger.warning(f"Unknown command {action.name} ignored")

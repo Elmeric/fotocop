@@ -3,6 +3,7 @@
 import sys
 import os
 import logging
+from pathlib import Path
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -14,14 +15,19 @@ from fotocop.util import qtutil as QtUtil
 
 # Models
 from fotocop.models import settings as Config
-from fotocop.models.sources import SourceManager
+from fotocop.models.sources import SourceManager, SourceType, Selection
 from fotocop.models.downloader import Downloader
+from fotocop.models.naming import Case, TemplateType
 
 # Views
+from .fileexplorer import FileSystemModel, FileSystemDelegate, FileSystemFilter
 from .sourceselector import SourceSelector
 from .thumbnailviewer import ThumbnailViewer
 from .timelineviewer import TimelineViewer
 from .renamepanel import RenamePanel
+from .destinationpanel import DestinationPanel
+from .download import DownloadButton, DownloadProgress
+from .sessioneditor import SessionEditor
 
 __all__ = ["QtMain"]
 
@@ -52,7 +58,12 @@ class QtMainView(QtWidgets.QMainWindow):
         _status: reference to the Main window status bar.
     """
 
-    def __init__(self, sourceManager: SourceManager, splash, *args, **kwargs):
+    def __init__(
+            self,
+            sourceManager: SourceManager,
+            splash,
+            *args, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
 
         splash.setProgress(10, "Create Gui objects...")
@@ -60,44 +71,70 @@ class QtMainView(QtWidgets.QMainWindow):
         self._splash = splash
 
         resources = Config.fotocopSettings.resources
-        selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
         # Initialize the app's views. Init order fixed to comply with the editors' dependencies.
+        fsModel = FileSystemModel()
+        fsDelegate = FileSystemDelegate()
+        fsFilter = FileSystemFilter()
+        fsFilter.setSourceModel(fsModel)
         self._sourceManager = sourceManager
-        sourceSelector = SourceSelector(sourceManager)
+        sourceSelector = SourceSelector(sourceManager, fsModel, fsFilter, fsDelegate)
 
-        # destSelector = QtUtil.DirectorySelector(
-        #     label="Destination folder:",
-        #     placeHolder="Path to the destination folder",
-        #     selectIcon=selectIcon,
-        #     tip=f"Select the destination folder. Absolute path or path"
-        #     f" relative to {Config.fotocopSettings.defaultDirectory}",
-        #     directoryGetter=lambda: str(Config.fotocopSettings.defaultDirectory),
-        #     shallExist=True,
-        #     defaultPath="",
-        #     parent=self,
-        # )
         # https://stackoverflow.com/questions/42673010/how-to-correctly-load-images-asynchronously-in-pyqt5
         thumbnailViewer = ThumbnailViewer()
 
         timelineViewer = TimelineViewer(parent=self)
 
-        downloader = Downloader()
-        renamePanel = RenamePanel(downloader=downloader, parent=self)
+        self._downloader = Downloader()
+        renamePanel = RenamePanel(downloader=self._downloader, parent=self)
+        destinationPanel = DestinationPanel(
+            downloader=self._downloader,
+            fsModel=fsModel,
+            fsFilter=fsFilter,
+            fsDelegate=fsDelegate,
+            parent=self
+        )
 
         self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
+
         self._sourceManager.sourceSelected.connect(sourceSelector.displaySelectedSource)
+        self._sourceManager.sourceSelected.connect(self.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(thumbnailViewer.setSourceSelection)
         self._sourceManager.sourceSelected.connect(timelineViewer.setTimeline)
-        self._sourceManager.sourceSelected.connect(downloader.setSourceSelection)
+        self._sourceManager.sourceSelected.connect(self._downloader.setSourceSelection)
+        self._sourceManager.sourceSelected.connect(self._downloader.updateImageSample)
+        self._sourceManager.sourceSelected.connect(self._updateDownloadButtonText)
+
         self._sourceManager.imagesBatchLoaded.connect(thumbnailViewer.addImages)
+
         self._sourceManager.thumbnailLoaded.connect(thumbnailViewer.updateImage)
+
         self._sourceManager.datetimeLoaded.connect(timelineViewer.updateTimeline)
+
         self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
         self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
-        self._sourceManager.timelineBuilt.connect(downloader.updateImageSample)
-        downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
+        self._sourceManager.timelineBuilt.connect(self._downloader.updateImageSample)
+        self._sourceManager.timelineBuilt.connect(self._updateDownloadButtonText)
+
+        self._sourceManager.imagesSelectionChanged.connect(self._downloader.updateImageSample)
+        self._sourceManager.imagesSelectionChanged.connect(self._updateDownloadButtonText)
+        self._sourceManager.imagesSelectionChanged.connect(thumbnailViewer.updateSelStatus)
+
+        self._sourceManager.imagesSessionChanged.connect(self._downloader.updateImageSample)
+
+        self._downloader.imageNamingTemplateSelected.connect(renamePanel.imageNamingTemplateSelected)
+        self._downloader.imageNamingExtensionSelected.connect(renamePanel.imageNamingExtensionSelected)
+        self._downloader.destinationNamingTemplateSelected.connect(destinationPanel.destinationNamingTemplateSelected)
+
+        self._downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
+        self._downloader.folderPreviewChanged.connect(destinationPanel.folderPreviewChanged)
+
+        self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
+
+        self._downloader.sessionRequired.connect(thumbnailViewer.requestSession)
+
         thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
+
         timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
         timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)
         timelineViewer.timeRangeChanged.connect(thumbnailViewer.updateTimeRange)
@@ -107,7 +144,7 @@ class QtMainView(QtWidgets.QMainWindow):
         # Build the main view layout.
         centerVertSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         centerVertSplitter.setChildrenCollapsible(False)
-        centerVertSplitter.setHandleWidth(2)
+        centerVertSplitter.setHandleWidth(3)
         centerVertSplitter.addWidget(thumbnailViewer)
         centerVertSplitter.addWidget(timelineViewer)
         centerVertSplitter.setStretchFactor(0, 5)
@@ -116,15 +153,22 @@ class QtMainView(QtWidgets.QMainWindow):
 
         rightWidget = QtWidgets.QWidget()
         rightLayout = QtWidgets.QVBoxLayout()
+        rightLayout.setContentsMargins(5, 0, 0, 5)
+        rightLayout.setSpacing(0)
         rightLayout.addWidget(renamePanel)
-        # rightLayout.addWidget(destSelector)
-        rightLayout.addStretch()
+        rightLayout.addWidget(destinationPanel)
         rightWidget.setLayout(rightLayout)
+
+        leftWidget = QtWidgets.QWidget()
+        leftLayout = QtWidgets.QVBoxLayout()
+        leftLayout.setContentsMargins(0, 0, 5, 5)
+        leftLayout.addWidget(sourceSelector)
+        leftWidget.setLayout(leftLayout)
 
         horzSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         horzSplitter.setChildrenCollapsible(False)
-        horzSplitter.setHandleWidth(2)
-        horzSplitter.addWidget(sourceSelector)
+        horzSplitter.setHandleWidth(3)
+        horzSplitter.addWidget(leftWidget)
         horzSplitter.addWidget(centerVertSplitter)
         horzSplitter.addWidget(rightWidget)
         horzSplitter.setStretchFactor(0, 1)
@@ -135,36 +179,98 @@ class QtMainView(QtWidgets.QMainWindow):
         self.setCentralWidget(horzSplitter)
 
         # Build actions used in toolbars.
-        helpAboutAction = QtUtil.createAction(
+        self.downloadAction = QtUtil.createAction(
             self,
-            "&About",
-            slot=self.helpAbout,
-            tip="About the application",
-            shortcut="Ctrl+?",
-            icon=f"{resources}/info.png",
+            "&Download",
+            slot=self.doDownloadAction,
+            tip="Download selected images",
+            shortcut="Ctrl+Return",
+            icon=f"{resources}/download.png",
         )
-        settingsAction = QtUtil.createAction(
+        preferencesAction = QtUtil.createAction(
             self,
             "Se&ttings",
-            slot=self.adjustSettings,
-            shortcut="Ctrl+Alt+S",
+            slot=self.doPreferencesAction,
+            shortcut="Ctrl+P",
             icon=f"{resources}/settings.png",
             tip="Adjust application settings",
         )
-        QtWidgets.QShortcut(QtGui.QKeySequence("CTRL+Q"), self, self.close)  # noqa
+        aboutAction = QtUtil.createAction(
+            self,
+            "&About",
+            slot=self.doAboutAction,
+            tip="About the application",
+            shortcut="Ctrl+?",
+            icon=f"{resources}/about.png",
+        )
+        quitAction = QtUtil.createAction(
+            self,
+            "&Quit",
+            slot=self.close,
+            tip="Close the application",
+            shortcut="Ctrl+Q",
+            icon=f"{resources}/close-window.png",
+        )
 
-        # To right-align the help toolbar.
+        self.downloadButton = DownloadButton(self.downloadAction.text())
+        self.downloadButton.setToolTip(self.downloadAction.toolTip())
+        self.downloadButton.setStatusTip(self.downloadAction.statusTip())
+        self.downloadButton.setDefault(True)
+        self.downloadButton.clicked.connect(self.downloadButtonClicked)
+        self._downloader.sessionRequired.connect(self.downloadButton.requestSession)
+        self._downloader.datetimeRequired.connect(self.downloadButton.requestDatetime)
+
+        sourceWidget = QtWidgets.QWidget()
+        self.sourcePix = QtWidgets.QLabel()
+        self.sourceLbl = QtWidgets.QLabel()
+        self.sourceLbl.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.sourceLbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self.sourceLbl.setFixedWidth(350)
+        srcLayout = QtWidgets.QHBoxLayout()
+        srcLayout.setContentsMargins(10, 0, 10, 0)
+        srcLayout.addWidget(self.sourcePix, 0, QtCore.Qt.AlignCenter)
+        srcLayout.addWidget(self.sourceLbl, 0, QtCore.Qt.AlignCenter)
+        srcLayout.addStretch()
+        sourceWidget.setLayout(srcLayout)
+
+        # To right-align the main toolbar.
         spacer = QtWidgets.QWidget(self)
         spacer.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
         )
 
-        # Build the main toolbars.
-        helpToolbar = self.addToolBar("Help tools")
-        helpToolbar.addWidget(spacer)
-        helpToolbar.addAction(settingsAction)
-        helpToolbar.addSeparator()
-        helpToolbar.addAction(helpAboutAction)
+        # Build the main toolbar.
+        self.menu = QtWidgets.QMenu()
+        self.menu.addAction(self.downloadAction)
+        self.menu.addAction(preferencesAction)
+        self.menu.addSeparator()
+        self.menu.addAction(aboutAction)
+        self.menu.addAction(quitAction)
+
+        self.menuButton = QtWidgets.QToolButton()
+        self.menuButton.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        iconSize = QtCore.QSize(24, 24)
+        menuIcon = QtGui.QIcon(f"{resources}/hamburger-menu.png")
+        self.menuButton.setIconSize(iconSize)
+        self.menuButton.setIcon(menuIcon)
+        self.menuButton.setMenu(self.menu)
+
+        self.topBar = self.addToolBar("Fotocop")
+        self.topBar.setIconSize(QtCore.QSize(36, 36))
+        self.topBar.installEventFilter(self)
+        self.topBar.setFloatable(False)
+        self.topBar.setMovable(False)
+        self.topBar.setStyleSheet("QPushButton{margin-right: 20 px;}")
+        self.topBar.addWidget(sourceWidget)
+        self.topBar.addWidget(spacer)
+        self.topBar.addWidget(self.downloadButton)
+        self.topBar.addWidget(self.menuButton)
+
+        self.downloadProgress = DownloadProgress(self._downloader, self)
+        self._downloader.backgroundActionStarted.connect(self.downloadProgress.reinit)
+        self._downloader.backgroundActionProgressChanged.connect(self.downloadProgress.updateProgress)
+        self._downloader.backgroundActionCompleted.connect(self.downloadProgress.terminate)
+        self._downloader.backgroundActionCancelled.connect(self.downloadProgress.onCancel)
 
         # Build the status bar.
         actionProgressBar = QtUtil.BackgroundProgressBar()
@@ -172,6 +278,10 @@ class QtMainView(QtWidgets.QMainWindow):
         self._sourceManager.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
         self._sourceManager.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
         self._sourceManager.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
+        self._downloader.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
+        self._downloader.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
+        self._downloader.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
+        self._downloader.backgroundActionCancelled.connect(actionProgressBar.hideActionProgress)
 
         self._status = QtUtil.StatusBar()
         self.setStatusBar(self._status)
@@ -195,6 +305,12 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
+
+        self._sourceManager.selectLastSource(settings.lastSource)
+        self._downloader.selectDestination(Path(settings.lastDestination))
+        self._downloader.setNamingTemplate(TemplateType.IMAGE, settings.lastImageNamingTemplate)
+        self._downloader.setNamingTemplate(TemplateType.DESTINATION, settings.lastDestinationNamingTemplate)
+        self._downloader.setExtension(Case[settings.lastNamingExtension])
 
         self._splash.setProgress(100)
 
@@ -237,20 +353,81 @@ class QtMainView(QtWidgets.QMainWindow):
         #         return self.saveProject()
         return True
 
+    @QtCore.pyqtSlot(Selection)
+    def displaySelectedSource(self, selection: Selection) -> None:
+        """Update the sourceSelector widgets on source selection.
+
+        Call when the source manager signals that a source is selected. The selected
+        source may be a Device or a LogicalDisk object, or unknown (none).
+
+        Args:
+            selection: the source manager selection
+        """
+        resources = Config.fotocopSettings.resources
+
+        source = selection.source
+        kind = selection.kind
+
+        if kind == SourceType.DEVICE:
+            caption = source.caption
+            self.sourcePix.setPixmap(
+                QtGui.QPixmap(f"{resources}/device.png").scaledToHeight(
+                    48, QtCore.Qt.SmoothTransformation
+                )
+            )
+            QtUtil.setElidedText(self.sourceLbl, f"FROM {caption}\nAll pictures")
+            toolTip = f"Device: {caption}"
+            self.sourceLbl.setToolTip(toolTip)
+            self.sourceLbl.setStatusTip(toolTip)
+
+        elif kind == SourceType.DRIVE:
+            icon = SourceSelector.DRIVE_ICON.get(source.kind, "drive.png")
+            self.sourcePix.setPixmap(
+                QtGui.QPixmap(f"{resources}/{icon}").scaledToHeight(
+                    48, QtCore.Qt.SmoothTransformation
+                )
+            )
+            caption = source.caption
+            path = source.selectedPath
+            posixPath = path.as_posix()
+            sourcePath = posixPath[3:].replace("/", " / ")
+            subDirs = source.subDirs
+            QtUtil.setElidedText(
+                self.sourceLbl, f"FROM {caption}\n{sourcePath}{' +' if subDirs else ''}"
+            )
+            toolTip = f"Drive: {caption}\nPath: {posixPath}{' (including subfolders)' if subDirs else ''}"
+            self.sourceLbl.setToolTip(toolTip)
+            self.sourceLbl.setStatusTip(toolTip)
+
+        else:
+            assert kind == SourceType.UNKNOWN
+            self.sourcePix.setPixmap(
+                QtGui.QPixmap(f"{resources}/double-down.png").scaledToHeight(
+                    48, QtCore.Qt.SmoothTransformation
+                )
+            )
+            self.sourceLbl.setText("Select a source")
+            self.sourceLbl.setToolTip("")
+            self.sourceLbl.setStatusTip("")
+
     @QtCore.pyqtSlot()
-    def adjustSettings(self):
+    def doDownloadAction(self):
+        self.downloadButton.animateClick()
+
+    @QtCore.pyqtSlot()
+    def doPreferencesAction(self):
         # TODO: Create a settings dialog.
         """Show the Fotocop settings dialog.
 
         If dialog is accepted, the settings changes are saved.
         """
-        pass
+        print("Preferences...")
         # form = SettingsView(parent=self)
         # if form.exec_():
         #     Config.fotocopSettings.save()
 
     @QtCore.pyqtSlot()
-    def helpAbout(self):
+    def doAboutAction(self):
         """Show the Fotocop 'About' dialog."""
         pass
         resources = Config.fotocopSettings.resources
@@ -283,7 +460,37 @@ class QtMainView(QtWidgets.QMainWindow):
             <img style="vertical-align:middle" src="{resources}/icons8.png" alt="icons8.com" height="32"></a>
             </p>
             """,
-        )  # noqa
+        )
+
+    @QtCore.pyqtSlot()
+    def downloadButtonClicked(self) -> None:
+        if self.downloadButton.sessionRequired:
+            sourceSelection = self._sourceManager.selection
+            imageKeys = [
+                key
+                for key, image in sourceSelection.images.items()
+                if image.isSelected and not image.session
+            ]
+            if imageKeys:
+                dialog = SessionEditor(imagesCount=len(imageKeys), parent=self)
+                if dialog.exec():
+                    session = dialog.session
+                else:
+                    session = ""
+                if not session:
+                    return
+                sourceSelection.setImagesSession(imageKeys, session)
+
+        self._downloader.download()
+
+    @QtCore.pyqtSlot()
+    def _updateDownloadButtonText(self) -> None:
+        count = self._sourceManager.selection.selectedImagesCount
+        text = f" {count} images" if count > 1 else f" 1 image" if count == 1 else ""
+        self.downloadButton.setText(f"Download{text}")
+        selOk = count > 0
+        dateOk = not self.downloadButton.datetimeRequired or self._sourceManager.selection.timelineBuilt
+        self.downloadButton.setEnabled(selOk and dateOk)
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
         """Trap the Escape key to close the application.
@@ -299,41 +506,48 @@ class QtMainView(QtWidgets.QMainWindow):
         else:
             super().keyPressEvent(e)
 
-    def closeEvent(self, event: QtGui.QCloseEvent):
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """Trap the main window close request to allow saving pending changes.
 
-        If action is confirmed, save the application settings.
+        Save the downloader sequences and the application settings.
 
         Args:
             event: the window close request
         """
-        if self.okToContinue():
-            Config.fotocopSettings.windowPosition = (
-                self.frameGeometry().x(),
-                self.frameGeometry().y(),
-            )
-            Config.fotocopSettings.windowSize = (
-                self.geometry().width(),
-                self.geometry().height(),
-            )
+        self._downloader.saveSequences()
 
-            try:
-                Config.fotocopSettings.save()
-            except Config.settings.SettingsError:
-                reply = QtWidgets.QMessageBox.question(
-                    self,  # noqa
-                    f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
-                    f"Cannot save the settings file {Config.fotocopSettings.settingsFile}: quit anyway?",
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                )  # noqa
-                if reply == QtWidgets.QMessageBox.No:
-                    # reject dialog close event
-                    event.ignore()
-            # Saving fotocopSettings OK or reply = QMessageBox.Yes: accept dialog close event
-            else:
-                self._sourceManager.close()
-        else:
-            event.ignore()
+        Config.fotocopSettings.windowPosition = (
+            self.frameGeometry().x(),
+            self.frameGeometry().y(),
+        )
+        Config.fotocopSettings.windowSize = (
+            self.geometry().width(),
+            self.geometry().height(),
+        )
+        try:
+            Config.fotocopSettings.save()
+        except Config.settings.SettingsError:
+            reply = QtWidgets.QMessageBox.question(
+                self,  # noqa
+                f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
+                f"Cannot save the settings file {Config.fotocopSettings.settingsFile}: quit anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            )
+            if reply == QtWidgets.QMessageBox.No:
+                # reject dialog close event
+                event.ignore()
+                return
+
+        # Saving fotocopSettings OK or reply == QMessageBox.Yes
+        self._sourceManager.close()
+        self._downloader.close()
+
+    def eventFilter(self, obj, event) -> bool:
+        # https://www.qtcentre.org/threads/7718-How-to-disable-context-menu-of-a-toolbar-in-QMainApplication
+        if event.type() == QtCore.QEvent.ContextMenu and obj == self.topBar:
+            return True
+
+        return super().eventFilter(obj, event)
 
 
 def QtMain():

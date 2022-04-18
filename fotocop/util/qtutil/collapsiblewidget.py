@@ -21,6 +21,7 @@ class _TitleFrame(QtWidgets.QFrame):
         self.setMinimumHeight(24)
         # self.move(QtCore.QPoint(24, 0))
         self.setStyleSheet("border:1px solid rgb(41, 41, 41); ")
+        self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         self._arrow = _Arrow(isCollapsed=isCollapsed)
         self._arrow.setStyleSheet("border:0px")
@@ -83,6 +84,8 @@ class CollapsibleWidget(QtWidgets.QWidget):
 
         self._isCollapsed = isCollapsed
 
+        self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Minimum)
+
         self._titleFrame = _TitleFrame(title=title, isCollapsed=isCollapsed)
         self._titleFrame.clicked.connect(self.toggleCollapsed)
 
@@ -111,3 +114,13 @@ class CollapsibleWidget(QtWidgets.QWidget):
         self._content.setVisible(self._isCollapsed)
         self._isCollapsed = not self._isCollapsed
         self._titleFrame.collapse(self._isCollapsed)
+
+    def expand(self) -> None:
+        self._isCollapsed = False
+        self._content.setVisible(True)
+        self._titleFrame.collapse(False)
+
+    def collapse(self) -> None:
+        self._isCollapsed = True
+        self._content.setVisible(False)
+        self._titleFrame.collapse(True)

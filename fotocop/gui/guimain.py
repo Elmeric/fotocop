@@ -3,9 +3,7 @@
 import sys
 import os
 import logging
-import math
 from pathlib import Path
-from typing import Tuple
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -18,7 +16,7 @@ from fotocop.util import qtutil as QtUtil
 # Models
 from fotocop.models import settings as Config
 from fotocop.models.sources import SourceManager, SourceType, Selection
-from fotocop.models.downloader import Downloader, SequencesError
+from fotocop.models.downloader import Downloader
 from fotocop.models.naming import Case, TemplateType
 
 # Views
@@ -28,67 +26,12 @@ from .thumbnailviewer import ThumbnailViewer
 from .timelineviewer import TimelineViewer
 from .renamepanel import RenamePanel
 from .destinationpanel import DestinationPanel
+from .download import DownloadButton, DownloadProgress
+from .sessioneditor import SessionEditor
 
 __all__ = ["QtMain"]
 
 logger = logging.getLogger(__name__)
-
-
-class DownloadButton(QtWidgets.QPushButton):
-    """Button used to initiate downloads.
-    """
-
-    def __init__(self, text: str, parent=None) -> None:
-        super().__init__(text, parent)
-
-        self.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
-
-        fontHeight = QtGui.QFontMetrics(QtWidgets.QApplication.font()).height()
-        padding = math.ceil(fontHeight * 1.25)
-        height = fontHeight // 2 * 4
-        radius = height // 2
-
-        palette = QtGui.QGuiApplication.palette()
-        primaryColor = palette.highlight().color()
-        borderColor = primaryColor.darker(105)
-        hoverColor = primaryColor.darker(106)
-        hoverBorderColor = hoverColor.darker(105)
-        primaryTextColor = palette.highlightedText().color()
-
-        # if is_dark_mode():
-        #     disabledColor = palette.window().color().lighter(130)
-        #     disabledBorderColor = disabledColor.lighter(115)
-        #     disabledTextColor = palette.highlightedText().color()
-        # else:
-        disabledColor = palette.window().color().darker(120)
-        disabledBorderColor = disabledColor.darker(105)
-        disabledTextColor = primaryTextColor
-
-        self.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: {primaryColor.name()};
-                outline: none;
-                padding-left: {padding:d}px;
-                padding-right: {padding:d}px;
-                border-radius: {radius:d}px;
-                border: 1px solid {borderColor.name()};
-                height: {height:d}px;
-                color: {primaryTextColor.name()};
-                font-weight: bold;
-                font-size: {fontHeight:d}px
-            }}
-            QPushButton:hover {{
-                background-color: {hoverColor.name()};
-                border: 1px solid {hoverBorderColor.name()};
-            }}
-            QPushButton:disabled {{
-                background-color: {disabledColor.name()};
-                color: {disabledTextColor.name()};
-                border: 1px solid {disabledBorderColor.name()};
-            }}
-            """
-        )
 
 
 class QtMainView(QtWidgets.QMainWindow):
@@ -115,7 +58,12 @@ class QtMainView(QtWidgets.QMainWindow):
         _status: reference to the Main window status bar.
     """
 
-    def __init__(self, sourceManager: SourceManager, splash, *args, **kwargs):
+    def __init__(
+            self,
+            sourceManager: SourceManager,
+            splash,
+            *args, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
 
         splash.setProgress(10, "Create Gui objects...")
@@ -123,7 +71,6 @@ class QtMainView(QtWidgets.QMainWindow):
         self._splash = splash
 
         resources = Config.fotocopSettings.resources
-        selectIcon = QtGui.QIcon(f"{resources}/select.png")
 
         # Initialize the app's views. Init order fixed to comply with the editors' dependencies.
         fsModel = FileSystemModel()
@@ -149,28 +96,45 @@ class QtMainView(QtWidgets.QMainWindow):
         )
 
         self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
+
         self._sourceManager.sourceSelected.connect(sourceSelector.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(self.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(thumbnailViewer.setSourceSelection)
         self._sourceManager.sourceSelected.connect(timelineViewer.setTimeline)
         self._sourceManager.sourceSelected.connect(self._downloader.setSourceSelection)
         self._sourceManager.sourceSelected.connect(self._downloader.updateImageSample)
+        self._sourceManager.sourceSelected.connect(self._updateDownloadButtonText)
+
         self._sourceManager.imagesBatchLoaded.connect(thumbnailViewer.addImages)
+
         self._sourceManager.thumbnailLoaded.connect(thumbnailViewer.updateImage)
+
         self._sourceManager.datetimeLoaded.connect(timelineViewer.updateTimeline)
+
         self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
         self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
         self._sourceManager.timelineBuilt.connect(self._downloader.updateImageSample)
+        self._sourceManager.timelineBuilt.connect(self._updateDownloadButtonText)
+
         self._sourceManager.imagesSelectionChanged.connect(self._downloader.updateImageSample)
+        self._sourceManager.imagesSelectionChanged.connect(self._updateDownloadButtonText)
+        self._sourceManager.imagesSelectionChanged.connect(thumbnailViewer.updateSelStatus)
+
         self._sourceManager.imagesSessionChanged.connect(self._downloader.updateImageSample)
+
         self._downloader.imageNamingTemplateSelected.connect(renamePanel.imageNamingTemplateSelected)
         self._downloader.imageNamingExtensionSelected.connect(renamePanel.imageNamingExtensionSelected)
-        self._downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
-        self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
         self._downloader.destinationNamingTemplateSelected.connect(destinationPanel.destinationNamingTemplateSelected)
+
+        self._downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
         self._downloader.folderPreviewChanged.connect(destinationPanel.folderPreviewChanged)
+
+        self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
+
         self._downloader.sessionRequired.connect(thumbnailViewer.requestSession)
+
         thumbnailViewer.zoomLevelChanged.connect(timelineViewer.zoom)
+
         timelineViewer.zoomed.connect(thumbnailViewer.onZoomLevelChanged)
         timelineViewer.hoveredNodeChanged.connect(thumbnailViewer.showNodeInfo)
         timelineViewer.timeRangeChanged.connect(thumbnailViewer.updateTimeRange)
@@ -253,6 +217,8 @@ class QtMainView(QtWidgets.QMainWindow):
         self.downloadButton.setStatusTip(self.downloadAction.statusTip())
         self.downloadButton.setDefault(True)
         self.downloadButton.clicked.connect(self.downloadButtonClicked)
+        self._downloader.sessionRequired.connect(self.downloadButton.requestSession)
+        self._downloader.datetimeRequired.connect(self.downloadButton.requestDatetime)
 
         sourceWidget = QtWidgets.QWidget()
         self.sourcePix = QtWidgets.QLabel()
@@ -300,12 +266,22 @@ class QtMainView(QtWidgets.QMainWindow):
         self.topBar.addWidget(self.downloadButton)
         self.topBar.addWidget(self.menuButton)
 
+        self.downloadProgress = DownloadProgress(self._downloader, self)
+        self._downloader.backgroundActionStarted.connect(self.downloadProgress.reinit)
+        self._downloader.backgroundActionProgressChanged.connect(self.downloadProgress.updateProgress)
+        self._downloader.backgroundActionCompleted.connect(self.downloadProgress.terminate)
+        self._downloader.backgroundActionCancelled.connect(self.downloadProgress.onCancel)
+
         # Build the status bar.
         actionProgressBar = QtUtil.BackgroundProgressBar()
         actionProgressBar.hide()
         self._sourceManager.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
         self._sourceManager.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
         self._sourceManager.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
+        self._downloader.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
+        self._downloader.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
+        self._downloader.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
+        self._downloader.backgroundActionCancelled.connect(actionProgressBar.hideActionProgress)
 
         self._status = QtUtil.StatusBar()
         self.setStatusBar(self._status)
@@ -436,7 +412,6 @@ class QtMainView(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def doDownloadAction(self):
-        print("Downloading...")
         self.downloadButton.animateClick()
 
     @QtCore.pyqtSlot()
@@ -485,51 +460,37 @@ class QtMainView(QtWidgets.QMainWindow):
             <img style="vertical-align:middle" src="{resources}/icons8.png" alt="icons8.com" height="32"></a>
             </p>
             """,
-        )  # noqa
+        )
 
     @QtCore.pyqtSlot()
     def downloadButtonClicked(self) -> None:
+        if self.downloadButton.sessionRequired:
+            sourceSelection = self._sourceManager.selection
+            imageKeys = [
+                key
+                for key, image in sourceSelection.images.items()
+                if image.isSelected and not image.session
+            ]
+            if imageKeys:
+                dialog = SessionEditor(imagesCount=len(imageKeys), parent=self)
+                if dialog.exec():
+                    session = dialog.session
+                else:
+                    session = ""
+                if not session:
+                    return
+                sourceSelection.setImagesSession(imageKeys, session)
+
         self._downloader.download()
-#         if self.download_paused:
-#             logging.debug("Download resumed")
-#             self.resumeDownload()
-#         else:
-#             if self.downloadIsRunning():
-#                 self.pauseDownload()
-#             else:
-#                 start_download = True
-#                 if (
-#                         self.prefs.warn_downloading_all
-#                         and self.thumbnailModel.anyCheckedFilesFiltered()
-#                 ):
-#                     message = _(
-#                         """
-# <b>Downloading all files</b><br><br>
-# A download always includes all files that are marked for download,
-# including those that are not currently displayed because the Timeline
-# is being used or because only new files are being shown.<br><br>
-# Do you want to proceed with the download?"""
-#                     )
-#
-#                     warning = RememberThisDialog(
-#                         message=message,
-#                         icon=":/rapid-photo-downloader.svg",
-#                         remember=RememberThisMessage.do_not_ask_again,
-#                         parent=self,
-#                     )
-#
-#                     start_download = warning.exec_()
-#                     if warning.remember:
-#                         self.prefs.warn_downloading_all = False
-#
-#                 if start_download:
-#                     logging.debug("Download activated")
-#
-#                     if self.jobCodePanel.needToPromptForJobCode():
-#                         if self.jobCodePanel.getJobCodeBeforeDownload():
-#                             self.startDownload()
-#                     else:
-#                         self.startDownload()
+
+    @QtCore.pyqtSlot()
+    def _updateDownloadButtonText(self) -> None:
+        count = self._sourceManager.selection.selectedImagesCount
+        text = f" {count} images" if count > 1 else f" 1 image" if count == 1 else ""
+        self.downloadButton.setText(f"Download{text}")
+        selOk = count > 0
+        dateOk = not self.downloadButton.datetimeRequired or self._sourceManager.selection.timelineBuilt
+        self.downloadButton.setEnabled(selOk and dateOk)
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
         """Trap the Escape key to close the application.
@@ -553,21 +514,8 @@ class QtMainView(QtWidgets.QMainWindow):
         Args:
             event: the window close request
         """
-        try:
-            self._downloader.saveSequences()
-        except SequencesError:
-            reply = QtWidgets.QMessageBox.question(
-                self,  # noqa
-                f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
-                f"Cannot save persistent sequences number: quit anyway?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            )
-            if reply == QtWidgets.QMessageBox.No:
-                # reject dialog close event
-                event.ignore()
-                return
+        self._downloader.saveSequences()
 
-        # Saving downloader sequences OK or reply == QMessageBox.Yes
         Config.fotocopSettings.windowPosition = (
             self.frameGeometry().x(),
             self.frameGeometry().y(),
@@ -584,7 +532,7 @@ class QtMainView(QtWidgets.QMainWindow):
                 f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
                 f"Cannot save the settings file {Config.fotocopSettings.settingsFile}: quit anyway?",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            )  # noqa
+            )
             if reply == QtWidgets.QMessageBox.No:
                 # reject dialog close event
                 event.ignore()

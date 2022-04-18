@@ -202,7 +202,6 @@ class TimelineView(QtWidgets.QGraphicsView):
                 self._firstSelectedItem = None
                 self._selectionInProgress = False
 
-                # print(f"Selected time ranges: {scene.timeline.selectionModel().selectedRanges()}")
         else:
             super().mouseReleaseEvent(event)
 

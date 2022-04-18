@@ -128,7 +128,6 @@ class TimelineViewer(QtWidgets.QWidget):
         for zoomLevel in tlv.ZoomLevel:
             self._scenes[zoomLevel].populate()
             self._scenes[zoomLevel].isLoaded = True
-        print("***** Scenes are loaded")
 
     @QtCore.pyqtSlot(tlv.ZoomLevel)
     def zoom(self, zoomLevel: tlv.ZoomLevel):

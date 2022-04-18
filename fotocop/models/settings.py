@@ -20,7 +20,6 @@ class FotocopSettings(settings.Settings):
             settings,
 
     Class attributes:
-        defaultDirectory: Path to the default projects directory.
         lastSource: key and info on the last open images' source.
         logLevel: The global Fotocop application log level.
         windowPosition: the last Fotocop application windows top left corner.
@@ -37,8 +36,7 @@ class FotocopSettings(settings.Settings):
 
     DEFAULT_LOGLEVEL = "INFO"
 
-    defaultDirectory = settings.Setting(defaultValue='F:/Users/Images/Mes Photos/Négatifs')
-    lastSource = settings.Setting(defaultValue=(None,"UNKNOWN", None, None))
+    lastSource = settings.Setting(defaultValue=(None, "UNKNOWN", None, None))
     lastDestination = settings.Setting(
         defaultValue=shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0)
     )
@@ -66,7 +64,7 @@ class FotocopSettings(settings.Settings):
         Returns:
             A string with the project path and all its spec items.
         """
-        return f'FotocopSettings({self.defaultDirectory}, {self.lastSource},' \
+        return f'FotocopSettings({self.lastSource},' \
                f'{self.lastDestination}, {self.logLevel}, {self.windowPosition},' \
                f'{self.windowSize}, {self.qtScaleFactor})'
 

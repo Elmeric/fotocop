@@ -48,7 +48,6 @@ class TimelineScene(QtWidgets.QGraphicsScene):
     def clearSelection(self):
         if self.timeline is not None:
             self.timeline.selectionModel().clearSelection()
-        # print(f"Selected time ranges: {self.timeline.selectionModel().selectedRanges()}")
 
     def clear(self):
         self._nodes = dict()
@@ -64,13 +63,8 @@ class TimelineScene(QtWidgets.QGraphicsScene):
 
     def populate(self):
         timeline = self.timeline
-        if timeline is not None:
-            if self.isLoaded:
-                print(f"{self.__class__.__name__} is loaded: no need to populate it")
-            else:
-                self._populate(timeline)
-        else:
-            print("No timeline defined yet")
+        if timeline is not None and not self.isLoaded:
+            self._populate(timeline)
 
     def selectedNodes(self) -> List["Node"]:
         """Get the selected nodes in the scene.

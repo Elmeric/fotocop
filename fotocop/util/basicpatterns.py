@@ -127,7 +127,6 @@ def delegate_as(delegate_cls, to='delegate', include=None, ignore=None):
         # setattr(cls, to, SimpleProperty())
         # don't bother adding attributes that the class already has
         attrs = attributes - set(cls.__dict__.keys())
-        print(attrs)
         # set all the attributes
         for attr in attrs:
             setattr(cls, attr, DelegatedAttribute(to, attr))

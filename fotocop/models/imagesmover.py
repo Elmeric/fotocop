@@ -3,17 +3,26 @@ import json
 from typing import Tuple, Optional, List, Dict
 from multiprocessing import Process, Event
 from enum import Enum, auto
-from pathlib import Path
 from datetime import datetime, date
 from dataclasses import dataclass
 
-
 from fotocop.util.logutil import LogConfig, configureRootLogger
+from fotocop.util.threadutil import StoppableThread
+from fotocop.util.pathutil import Path
 from fotocop.models import settings as Config
 from fotocop.models.naming import TemplateType, NamingTemplate
 from fotocop.models.sources import Image
 
 logger = logging.getLogger(__name__)
+
+
+def _publishData(conn, content: str, *data) -> None:
+    msg = (content, *data)
+    try:
+        conn.send(msg)
+        logger.debug(f"Data published: {msg}")
+    except (OSError, EOFError, BrokenPipeError):
+        pass
 
 
 @dataclass
@@ -27,7 +36,7 @@ class DownloadsToday:
         today = date.today()
         if self.date < today:
             self.date = today
-            self.count = 0
+            self.count = 1
         return self.count
 
     def set(self, count: int):
@@ -47,11 +56,6 @@ class DownloadsToday:
         self.date = date(int(year), int(month), int(day))
         self.count = value[1]
         return self
-
-
-class SequencesError(Exception):
-    """Exception raised on sequences saving error."""
-    pass
 
 
 class Sequences:
@@ -103,6 +107,7 @@ class Sequences:
                 return domnloadsToday, sequences["storedNumber"]
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning(f"Cannot load persistent sequences number: {e}")
+            self._isDirty = True
             return DownloadsToday(), 1
 
     def save(self):
@@ -122,14 +127,15 @@ class Sequences:
         except (OSError, TypeError) as e:
             msg = f"Cannot save persistent sequences number: {e}"
             logger.warning(msg)
-            raise SequencesError(msg)
         else:
             logger.info("Downloader sequences correctly saved.")
             self._isDirty = False
 
-    def increment(self):
-        self.storedNumber += 1
-        self.sessionNumber += 1
+    def increment(self, incSessionNb: bool, incStoredNb: bool) -> None:
+        if incStoredNb:
+            self.storedNumber += 1
+        if incSessionNb:
+            self.sessionNumber += 1
         self.downloadsToday.increment()
         self._isDirty = True
 
@@ -151,6 +157,109 @@ class Sequences:
         return letters
 
 
+class DownloadHandler(StoppableThread):
+    def __init__(
+            self,
+            selectedImages: List[Image],
+            destination: Path,
+            imageNamingTemplate: NamingTemplate,
+            destinationNamingTemplate: NamingTemplate,
+            sequences: Sequences,
+            conn,
+            *args, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.name = "StoppableDownloadHandler"
+        self._selectedImages = selectedImages
+        self._destination = destination
+        self._selectedImagesCount = len(selectedImages)
+        self._imageNamingTemplate = imageNamingTemplate
+        self._destinationNamingTemplate = destinationNamingTemplate
+        self._sequences = sequences
+        self._conn = conn
+
+    def run(self) -> None:
+        logger.info(f"Downloading {self._selectedImagesCount} images...")
+        self._downloadImages()
+
+    def _downloadImages(self):
+        selectedImages = self._selectedImages
+        selectedImagesCount = self._selectedImagesCount
+        _publishData(self._conn, "selected_images_count", selectedImagesCount)
+
+        folder = self._destination
+        downloadTime = datetime.now()
+        incrementSessionNb = (
+            self._imageNamingTemplate.useSessionNumber
+            or self._destinationNamingTemplate.useSessionNumber
+        )
+        incrementStoredNb = (
+            self._imageNamingTemplate.useStoredNumber
+            or self._destinationNamingTemplate.useStoredNumber
+        )
+        count = 0
+        stopped = False
+        downloadedImagesInfo = list()
+        for image in selectedImages:
+            if self.stopped():
+                logger.info(
+                    f"Stop downloading images, {len(selectedImages) - count} images remaining."
+                )
+                stopped = True
+                break
+            count += 1
+            name = self._renameImage(image, downloadTime)
+            path = self._makeDestinationFolder(image, downloadTime)
+            absPath = folder / path
+            uniqueName = self._ensureNameUnicity(name, absPath)
+            absName = absPath / uniqueName
+            try:
+                absPath.mkdir(parents=True, exist_ok=True)
+                Path(image.path).copy(absName)   # noqa
+            except OSError as e:
+                logger.warning(f"Cannot copy {image.name} to {absName.as_posix()}: {e}")
+            else:
+                self._sequences.increment(incrementSessionNb, incrementStoredNb)
+                downloadedImagesInfo.append((image.path, downloadTime, absName))
+            _publishData(self._conn, "downloaded_images_count", count)
+
+        if not stopped:
+            logger.info(f"{count} images downloaded.")
+            _publishData(
+                self._conn,
+                "download_completed",
+                f"Download completed! {count} images downloaded.",
+                downloadedImagesInfo
+            )
+        else:
+            _publishData(
+                self._conn,
+                "download_cancelled",
+                f"Download cancelled! {count} / {selectedImagesCount} images downloaded.",
+                downloadedImagesInfo
+            )
+
+    def _renameImage(self, image: "Image", downloadTime: datetime = datetime.now()) -> str:
+        return self._imageNamingTemplate.format(image, self._sequences, downloadTime)
+
+    def _makeDestinationFolder(self, image: "Image", downloadTime: datetime = datetime.now()) -> Path:
+        return Path(
+            self._destinationNamingTemplate.format(
+                image, self._sequences, downloadTime, TemplateType.DESTINATION
+            )
+        )
+
+    @staticmethod
+    def _ensureNameUnicity(name: str, path: Path) -> str:
+        i = 0
+        rootName = Path(name).stem
+        suffix = Path(name).suffix
+        while (path / name).exists():
+            i += 1
+            name = f'{rootName}-{i}{suffix}'
+        return name
+
+
 class ImageMover(Process):
 
     class Command(Enum):
@@ -162,6 +271,8 @@ class ImageMover(Process):
         GET_IMG_PREVIEW = auto()
         GET_FOLDERS_PREVIEW = auto()
         DOWNLOAD = auto()
+        CANCEL = auto()
+        SAVE_SEQ = auto()
 
     def __init__(self, conn):
         """
@@ -185,6 +296,8 @@ class ImageMover(Process):
         self._imageNamingTemplate: Optional[NamingTemplate] = None
         self._destinationNamingTemplate: Optional[NamingTemplate] = None
         self._images: List[Image] = list()
+
+        self._downloadHandler = None
 
     def run(self):
         """ImagesMover 'main loop'
@@ -213,6 +326,7 @@ class ImageMover(Process):
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping images mover...")
+                self._stopDownloading()
                 self._exitProcess.set()
             elif action == self.Command.SET_DEST:
                 # Update the ImageMover context with the destination path
@@ -227,19 +341,30 @@ class ImageMover(Process):
                 logger.debug(f"Update context, Destination naming template is {args.name}...")
                 self._setNamingTemplate(TemplateType.DESTINATION, args)
             elif action == self.Command.SET_IMAGES:
-                # Update the ImageMover context with the selected images to download
-                logger.debug(f"Update context, {len(args)} images to download...")
+                # Update the ImageMover context with the images in the selected source.
+                logger.debug(f"Update context, {len(args)} images...")
                 self._setImages(args)
             elif action == self.Command.GET_IMG_PREVIEW:
                 # Reply with preview of the given image sample according to the current context
-                # if args is not None:
-                logger.debug(f"Compute and publish image sample preview...")
+                logger.debug("Compute and publish image sample preview...")
                 self._publishImagePreview(args)
             elif action == self.Command.GET_FOLDERS_PREVIEW:
                 # Reply with preview of the "where to download folders" according to the
                 # current context
-                logger.debug(f"Compute and publish folders preview...")
+                logger.debug("Compute and publish folders preview...")
                 self._publishFolderPreview()
+            elif action == self.Command.DOWNLOAD:
+                # Rename and download the selected image.
+                logger.debug("Rename and download the selected images...")
+                self._download()
+            elif action == self.Command.CANCEL:
+                # Cancel the current download.
+                logger.debug("Download cancelled...")
+                self._stopDownloading()
+            elif action == self.Command.SAVE_SEQ:
+                # Save the Sequences state to persistent file.
+                logger.debug(f"Save the Sequences state to persistent file...")
+                self._sequences.save()
             else:
                 logger.warning(f"Unknown command {action.name} ignored")
 
@@ -247,7 +372,6 @@ class ImageMover(Process):
         self._destination = Path(path)
 
     def _setNamingTemplate(self, kind: TemplateType, template: NamingTemplate) -> None:
-        print(template.name, template.asText())
         if kind == TemplateType.IMAGE:
             self._imageNamingTemplate = template
         else:
@@ -261,10 +385,6 @@ class ImageMover(Process):
             if image.isLoaded and image.isSelected
         ]
         self._images = selectedImages
-        print(f"Received {len(images)} images, only {len(selectedImages)} are loaded and selected")
-        # for i in self._images:
-        #     print(i.path)
-        # self._images = images
 
     def _publishImagePreview(self, image: "Image") -> None:
         imageTemplate = self._imageNamingTemplate
@@ -275,7 +395,7 @@ class ImageMover(Process):
             samplePath = self._destinationNamingTemplate.format(
                 image, sequences, datetime.now(), TemplateType.DESTINATION
             )
-            self._publishData("image_preview", sampleName, samplePath)
+            _publishData(self._conn, "image_preview", sampleName, samplePath)
 
     def _publishFolderPreview(self) -> None:
         previewFolders = set()
@@ -292,12 +412,28 @@ class ImageMover(Process):
                 continue
             seen.append(absPath)
             previewFolders.add(absPath.as_posix())
-        self._publishData("folder_preview", previewFolders)
+        _publishData(self._conn, "folder_preview", previewFolders)
 
-    def _publishData(self, content: str, *data) -> None:
-        msg = (content, *data)
-        try:
-            self._conn.send(msg)
-            logger.debug(f"Data published: {data}")
-        except (OSError, EOFError, BrokenPipeError):
-            pass
+    def _download(self) -> None:
+        selectedImages = [image for image in self._images if image.isSelected]
+        logger.debug(f"Start a new download handler")
+        self._downloadHandler = DownloadHandler(
+            selectedImages,
+            self._destination,
+            self._imageNamingTemplate,
+            self._destinationNamingTemplate,
+            self._sequences,
+            self._conn
+        )
+        self._downloadHandler.start()
+
+    def _stopDownloading(self):
+        downloadHandler = self._downloadHandler
+        if downloadHandler and downloadHandler.is_alive():
+            logger.info("Stopping download handler...")
+            downloadHandler.stop()
+            downloadHandler.join(timeout=2)
+            if downloadHandler.is_alive():
+                logger.warning("Cannot join download handler")
+            else:
+                logger.info("Download handler stopped")

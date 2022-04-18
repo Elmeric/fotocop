@@ -115,6 +115,8 @@ class Selection:
         self.imagesCount = -1
         self._receivedExifCount = 0
 
+        self.timelineBuilt = False
+
     @property
     def path(self) -> str:
         source = self.source
@@ -173,6 +175,7 @@ class Selection:
             self.selectedImagesCount += len(newImages)
             logger.debug(f"Received batch: {batch} containing {len(newImages)} images")
             SourceManager().imagesBatchLoaded.emit(newImages)
+            SourceManager().imagesSelectionChanged.emit()
 
     def receiveDatetime(
         self, imageKey: ImageKey, datetime_: Tuple[str, str, str, str, str, str]
@@ -192,7 +195,6 @@ class Selection:
                 f"({receivedExifCount}/{imagesCount})"
             )
             image.datetime = Datation(*datetime_)
-            # image.datetime = datetime_
             image.loadingInProgress = False
             self.timeline.addDatetime(datetime_)
             sourceManager.backgroundActionProgressChanged.emit(receivedExifCount)
@@ -201,6 +203,7 @@ class Selection:
             if 0 < imagesCount == receivedExifCount:
                 sourceManager.backgroundActionCompleted.emit("Timeline built!")
                 receivedExifCount = 0
+                self.timelineBuilt = True   # noqa
                 sourceManager.timelineBuilt.emit()
                 sourceManager._buildTimelineInProgress = False
             self._receivedExifCount = receivedExifCount  # noqa
@@ -217,7 +220,7 @@ class Selection:
             image.loadingInProgress = False
             SourceManager().thumbnailLoaded.emit(imageKey)
 
-    def setImagesSelectedState(self, imageKeys: List[ImageKey], value: bool) -> None:
+    def markImagesAsSelected(self, imageKeys: List[ImageKey], value: bool) -> None:
         for imageKey in imageKeys:
             self.images[imageKey].isSelected = value
 
@@ -229,24 +232,35 @@ class Selection:
 
         SourceManager().imagesSessionChanged.emit()
 
-    def markImagesAsPreviouslyDownloaded(self, imageKeys: List[ImageKey]) -> None:
+    def markImagesAsPreviouslyDownloaded(
+            self,
+            imagesInfo: List[Tuple[str, Optional[datetime], Optional[Path]]]
+    ) -> None:
         records = list()
         now = datetime.now()
 
-        for imageKey in imageKeys:
-            image = self.images[imageKey]
-            if not image.isPreviouslyDownloaded:
+        for imageKey, downloadTime, downloadPath in imagesInfo:
+            if downloadTime is None:
+                downloadTime = now
+            if downloadPath is None:
+                downloadPath = Path(".")
+            try:
+                image = self.images[imageKey]
+            except KeyError as e:
+                logger.warning(f"Cannot mark {imageKey} as downloaded: image not found ({e})")
+            else:
                 image.isPreviouslyDownloaded = True  # noqa
                 image.isSelected = False
-                image.downloadPath = "."
-                image.downloadTime = now
+                image.downloadPath = downloadPath.as_posix()
+                image.downloadTime = downloadTime
                 name = image.name
                 stat = Path(image.path).stat()
                 size = stat.st_size
                 mtime = stat.st_mtime
-                records.append((name, size, mtime, ".", now))
+                records.append((name, size, mtime, downloadPath.as_posix(), downloadTime))
 
         SourceManager().downloadedDb.addDownloadedFiles(records)
+        SourceManager().imagesSelectionChanged.emit()
 
 
 class Datation(NamedTuple):
@@ -491,7 +505,8 @@ class SourceManager(metaclass=Singleton):
         self.devices = dict()
         self.logicalDisks = dict()
 
-        self.selection = Selection()
+        self.selection = None
+        self._resetSelection()
         self._scanInProgress = False
         self._buildTimelineInProgress = False
         self._exifRequestor = None
@@ -585,7 +600,8 @@ class SourceManager(metaclass=Singleton):
             self.selectDrive(lastSource[0], Path(lastSource[2]), lastSource[3])
 
         else:
-            self.sourceSelected.emit(Selection())
+            self._resetSelection()
+            self.sourceSelected.emit(self.selection)
 
     def selectDevice(self, name: str, eject: bool = False):
         # Abort any exif loading or images scanning before changing the selection
@@ -597,7 +613,7 @@ class SourceManager(metaclass=Singleton):
 
         except KeyError:
             # If the selected device is not found, change to an empty selection
-            self.selection = Selection()
+            self._resetSelection()
 
         else:
             # Set the device as the selection with its eject status and start to scan
@@ -620,7 +636,7 @@ class SourceManager(metaclass=Singleton):
 
         except KeyError:
             # If the selected device is not found, change to an empty selection
-            self.selection = Selection()
+            self._resetSelection()
 
         else:
             # Set the drive as the selection with its subfolders status and path
@@ -694,7 +710,7 @@ class SourceManager(metaclass=Singleton):
     def _reset(self):
         self._abortExifLoading()
         self._abortScannning()
-        self.selection = Selection()
+        self._resetSelection()
         self.devices.clear()
         self.logicalDisks.clear()
 
@@ -747,3 +763,7 @@ class SourceManager(metaclass=Singleton):
         else:
             name = path = subDirs = None
         Config.fotocopSettings.lastSource = (name, kind.name, path, subDirs)
+
+    def _resetSelection(self) -> None:
+        self.selection = Selection()
+        self.imagesSelectionChanged.emit()

@@ -11,7 +11,7 @@ from fotocop.models import settings as Config
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Image
-    from fotocop.models.downloader import Sequences
+    from fotocop.models.imagesmover import Sequences
 
 __all__ = [
     "Case",
@@ -128,7 +128,7 @@ class Token(TokenNode):
             return filename
 
         if genusName == "Image number":
-            n = re.search("(?P<imageNumber>[0-9]+$)", image.stem)
+            n = re.search(r"(?P<imageNumber>\d+$)", image.stem)
             if not n:
                 return ""
 
@@ -279,6 +279,18 @@ class NamingTemplate:
 
         self.sessionRequired = any(
             [token.genusName == "Session" for token in self.template]
+        )
+
+        self.datetimeRequired = any(
+            [token.genusName == "Image date" for token in self.template]
+        )
+
+        self.useSessionNumber = any(
+            [token.genusName in ("Session number", "Sequence letter") for token in self.template]
+        )
+
+        self.useStoredNumber = any(
+            [token.genusName == "Stored number" for token in self.template]
         )
 
     def asText(self) -> str:
@@ -532,7 +544,6 @@ class NamingTemplates:
         try:
             with self._templatesFile.open() as fh:
                 templates = json.load(fh, cls=NamingTemplateDecoder)
-                # templates = json.load(fh, object_hook=namingTemplateHook)
                 return templates["image"], templates["destination"]
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning(f"Cannot load custom naming templates: {e}")
@@ -543,8 +554,8 @@ class NamingTemplates:
 
         Use a dedicated JSONEncoder to handle NamingTemplate and Token objects.
 
-        Raises:
-            A NamingTemplatesError exception on OS or JSON encoding errors.
+        Returns:
+            A boolean status and associated error or success string message.
         """
         templates = {
             "image": self.image,
@@ -557,7 +568,6 @@ class NamingTemplates:
             msg = f"Cannot save custom naming templates: {e}"
             logger.warning(msg)
             return False, msg
-            # raise NamingTemplatesError(msg)
         else:
             return True, "Custom naming templates successfully saved."
 

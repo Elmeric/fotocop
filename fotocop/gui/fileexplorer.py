@@ -144,8 +144,6 @@ class FileSystemView(QtWidgets.QTreeView):
 
         expanded = False
         for path in self._fsModel.download_subfolders:
-            # print('path', path)
-            # index = self._fsModel.index(path)
             index = self.model().mapFromSource(self._fsModel.index(path))
             if not self.isExpanded(index):
                 self.expand(index)

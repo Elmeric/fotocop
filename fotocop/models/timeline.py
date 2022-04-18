@@ -88,9 +88,6 @@ class TimelineNodeSelection():
         self._newPartiallySelected = set()
         self._newDeselected = set()
 
-        # for item in itemSelection:
-        #     print(item, end=" ")
-        # print()
         if command == SelectionFlag.Clear:
             command = SelectionFlag.Deselect
 
@@ -101,17 +98,6 @@ class TimelineNodeSelection():
 
         for item in itemSelection:
             self._internalSelect(item, command)
-
-        # print("\n", "*"*25)
-        # print("Selected:")
-        # for i in self._newSelected:
-        #     print(i.date, end=" ")
-        # print("\nPartially selected:")
-        # for i in self._newPartiallySelected:
-        #     print(i.date, end=" ")
-        # print("\nDeselected")
-        # for i in self._newDeselected:
-        #     print(i.date, end=" ")
 
         self.selectionChanged.emit(self._newSelected, self._newPartiallySelected, self._newDeselected)
         self.timeRangeChanged.emit(self.selectedRanges())

@@ -142,9 +142,7 @@ class ImageModel(QtCore.QAbstractListModel):
         row = index.row()
         if role == QtCore.Qt.CheckStateRole:
             imageKey = self._images[row]
-            self._sourceSelection.setImagesSelectedState(
-                [imageKey], True if value == QtCore.Qt.Checked else False
-            )
+            self._sourceSelection.markImagesAsSelected([imageKey], True if value == QtCore.Qt.Checked else False)
             self.dataChanged.emit(index, index, (role,))
             return True
 
@@ -156,7 +154,7 @@ class ImageModel(QtCore.QAbstractListModel):
 
         if role == ImageModel.UserRoles.PreviouslyDownloadedRole:
             imageKey = self._images[row]
-            self._sourceSelection.markImagesAsPreviouslyDownloaded([imageKey])
+            self._sourceSelection.markImagesAsPreviouslyDownloaded([(imageKey, None, None)])
             self.dataChanged.emit(index, index, (role,))
             return True
 
@@ -193,20 +191,22 @@ class ImageModel(QtCore.QAbstractListModel):
     ) -> bool:
         rows = list()
         imageKeys = list()
+        imagesInfo = list()
         for index in selection:
             row = index.row()
             rows.append(row)
             imageKeys.append(self._images[row])
+            imagesInfo.append((self._images[row], None, None))
 
         if imageKeys:
             if role == QtCore.Qt.CheckStateRole:
-                self._sourceSelection.setImagesSelectedState(imageKeys, value)
+                self._sourceSelection.markImagesAsSelected(imageKeys, value)
 
             elif role == ImageModel.UserRoles.SessionRole:
                 self._sourceSelection.setImagesSession(imageKeys, value)
 
             elif role == ImageModel.UserRoles.PreviouslyDownloadedRole:
-                self._sourceSelection.markImagesAsPreviouslyDownloaded(imageKeys)
+                self._sourceSelection.markImagesAsPreviouslyDownloaded(imagesInfo)
             else:
                 return False
 
@@ -432,7 +432,7 @@ class ThumbnailDelegate(QtWidgets.QStyledItemDelegate):
         if state is None:
             return False
 
-        # Filter mouse button press or double clicked outside of the checkbox, key
+        # Filter mouse button press or double-clicked outside the checkbox, key
         # events that are not a check state key and or all non mouse or key events.
         if event.type() in (
             QtCore.QEvent.MouseButtonRelease,
@@ -663,17 +663,17 @@ class ThumbnailViewer(QtWidgets.QWidget):
             QtCore.Qt.CheckStateRole in roles
             or ImageModel.UserRoles.PreviouslyDownloadedRole in roles
         ):
-            self._updateSelStatus()
+            self.updateSelStatus()
 
     @QtCore.pyqtSlot(bool)
     def toggleNewOnly(self, checked: bool) -> None:
         self.thumbnailView.model().setIsNewFilterOn(checked)
-        self._updateSelStatus()
+        self.updateSelStatus()
 
     @QtCore.pyqtSlot(bool)
     def toggleFilter(self, checked: bool) -> None:
         self.thumbnailView.model().setIsDateFilterOn(checked)
-        self._updateSelStatus()
+        self.updateSelStatus()
 
     @QtCore.pyqtSlot(tlv.ZoomLevel)
     def onZoomLevelChanged(self, zoomLevel: tlv.ZoomLevel) -> None:
@@ -694,7 +694,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         thumbnailView = self.thumbnailView
         thumbnailView.model().setTimeRangeFilter(timeRange)
         thumbnailView.selectImages()
-        self._updateSelStatus()
+        self.updateSelStatus()
         self.sessionTxt.selectAll()
         self.sessionTxt.setFocus()
 
@@ -704,7 +704,7 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.filterBtn.setEnabled(True)
         self.selStatusLbl.show()
         self.zoomLevelSelector.setEnabled(True)
-        self._updateSelStatus()
+        self.updateSelStatus()
 
     @QtCore.pyqtSlot(QtCore.QItemSelection, QtCore.QItemSelection)
     def onSelectionChanged(
@@ -779,8 +779,10 @@ class ThumbnailViewer(QtWidgets.QWidget):
     def requestSession(self, sessionRequired: bool) -> None:
         self.thumbnailView.requestSession(sessionRequired)
 
-    def _updateSelStatus(self):
+    @QtCore.pyqtSlot()
+    def updateSelStatus(self):
         proxy = self.thumbnailView.model()
+        proxy.invalidateFilter()
         model = proxy.sourceModel()
         imagesCount = model.rowCount()
         imagesShown = proxy.rowCount()

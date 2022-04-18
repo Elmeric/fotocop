@@ -112,13 +112,11 @@ class DestinationWidget(QtUtil.QFramedWidget):
     @QtCore.pyqtSlot(Path)
     def showSelectedDestination(self, path: Path) -> None:
         def scrollTo(p):
-            print(p)
             dBrowser = self.destBrowser
             m = destBrowser.model().sourceModel()  # type: FileSystemModel
             pIdx = dBrowser.model().mapFromSource(m.index(p))
             dBrowser.scrollTo(pIdx, QtWidgets.QAbstractItemView.EnsureVisible)
 
-        print(f"Show selected destination: {path}{', INIT' if self._delayedScrollTo else ''}")
         path = path.as_posix()
 
         self.destinationLbl.setText(path)

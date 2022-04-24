@@ -576,9 +576,6 @@ class SourceManager(metaclass=Singleton):
         if not noSignal:
             self.sourceEnumerated.emit()
 
-        # Re-select the previous source if any
-        # self.selectLastSource(Config.fotocopSettings.lastSource)
-
     def getSources(
         self, enumerateFirst: bool = False
     ) -> Tuple[List[Device], List[LogicalDisk]]:

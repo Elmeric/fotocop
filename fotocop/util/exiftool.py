@@ -178,7 +178,9 @@ class ExifTool(object):
                 [self.executable, "-stay_open", "True",  "-@", "-",
                  "-common_args", "-charset", "filename=UTF8", "-G", "-n"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=devnull)
+                stderr=devnull,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
         self.running = True
         logger.info("ExifTool started")
 

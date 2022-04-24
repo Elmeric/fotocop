@@ -58,12 +58,7 @@ class QtMainView(QtWidgets.QMainWindow):
         _status: reference to the Main window status bar.
     """
 
-    def __init__(
-            self,
-            sourceManager: SourceManager,
-            splash,
-            *args, **kwargs
-    ) -> None:
+    def __init__(self, sourceManager: SourceManager, splash, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         splash.setProgress(10, "Create Gui objects...")
@@ -92,7 +87,7 @@ class QtMainView(QtWidgets.QMainWindow):
             fsModel=fsModel,
             fsFilter=fsFilter,
             fsDelegate=fsDelegate,
-            parent=self
+            parent=self,
         )
 
         self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
@@ -116,20 +111,38 @@ class QtMainView(QtWidgets.QMainWindow):
         self._sourceManager.timelineBuilt.connect(self._downloader.updateImageSample)
         self._sourceManager.timelineBuilt.connect(self._updateDownloadButtonText)
 
-        self._sourceManager.imagesSelectionChanged.connect(self._downloader.updateImageSample)
-        self._sourceManager.imagesSelectionChanged.connect(self._updateDownloadButtonText)
-        self._sourceManager.imagesSelectionChanged.connect(thumbnailViewer.updateSelStatus)
+        self._sourceManager.imagesSelectionChanged.connect(
+            self._downloader.updateImageSample
+        )
+        self._sourceManager.imagesSelectionChanged.connect(
+            self._updateDownloadButtonText
+        )
+        self._sourceManager.imagesSelectionChanged.connect(
+            thumbnailViewer.updateSelStatus
+        )
 
-        self._sourceManager.imagesSessionChanged.connect(self._downloader.updateImageSample)
+        self._sourceManager.imagesSessionChanged.connect(
+            self._downloader.updateImageSample
+        )
 
-        self._downloader.imageNamingTemplateSelected.connect(renamePanel.imageNamingTemplateSelected)
-        self._downloader.imageNamingExtensionSelected.connect(renamePanel.imageNamingExtensionSelected)
-        self._downloader.destinationNamingTemplateSelected.connect(destinationPanel.destinationNamingTemplateSelected)
+        self._downloader.imageNamingTemplateSelected.connect(
+            renamePanel.imageNamingTemplateSelected
+        )
+        self._downloader.imageNamingExtensionSelected.connect(
+            renamePanel.imageNamingExtensionSelected
+        )
+        self._downloader.destinationNamingTemplateSelected.connect(
+            destinationPanel.destinationNamingTemplateSelected
+        )
 
         self._downloader.imageSampleChanged.connect(renamePanel.updateImageSample)
-        self._downloader.folderPreviewChanged.connect(destinationPanel.folderPreviewChanged)
+        self._downloader.folderPreviewChanged.connect(
+            destinationPanel.folderPreviewChanged
+        )
 
-        self._downloader.destinationSelected.connect(destinationPanel.destinationSelected)
+        self._downloader.destinationSelected.connect(
+            destinationPanel.destinationSelected
+        )
 
         self._downloader.sessionRequired.connect(thumbnailViewer.requestSession)
 
@@ -268,20 +281,40 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self.downloadProgress = DownloadProgress(self._downloader, self)
         self._downloader.backgroundActionStarted.connect(self.downloadProgress.reinit)
-        self._downloader.backgroundActionProgressChanged.connect(self.downloadProgress.updateProgress)
-        self._downloader.backgroundActionCompleted.connect(self.downloadProgress.terminate)
-        self._downloader.backgroundActionCancelled.connect(self.downloadProgress.onCancel)
+        self._downloader.backgroundActionProgressChanged.connect(
+            self.downloadProgress.updateProgress
+        )
+        self._downloader.backgroundActionCompleted.connect(
+            self.downloadProgress.terminate
+        )
+        self._downloader.backgroundActionCancelled.connect(
+            self.downloadProgress.onCancel
+        )
 
         # Build the status bar.
         actionProgressBar = QtUtil.BackgroundProgressBar()
         actionProgressBar.hide()
-        self._sourceManager.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
-        self._sourceManager.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
-        self._sourceManager.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
-        self._downloader.backgroundActionStarted.connect(actionProgressBar.showActionProgress)
-        self._downloader.backgroundActionProgressChanged.connect(actionProgressBar.setActionProgressValue)
-        self._downloader.backgroundActionCompleted.connect(actionProgressBar.hideActionProgress)
-        self._downloader.backgroundActionCancelled.connect(actionProgressBar.hideActionProgress)
+        self._sourceManager.backgroundActionStarted.connect(
+            actionProgressBar.showActionProgress
+        )
+        self._sourceManager.backgroundActionProgressChanged.connect(
+            actionProgressBar.setActionProgressValue
+        )
+        self._sourceManager.backgroundActionCompleted.connect(
+            actionProgressBar.hideActionProgress
+        )
+        self._downloader.backgroundActionStarted.connect(
+            actionProgressBar.showActionProgress
+        )
+        self._downloader.backgroundActionProgressChanged.connect(
+            actionProgressBar.setActionProgressValue
+        )
+        self._downloader.backgroundActionCompleted.connect(
+            actionProgressBar.hideActionProgress
+        )
+        self._downloader.backgroundActionCancelled.connect(
+            actionProgressBar.hideActionProgress
+        )
 
         self._status = QtUtil.StatusBar()
         self.setStatusBar(self._status)
@@ -308,8 +341,12 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self._sourceManager.selectLastSource(settings.lastSource)
         self._downloader.selectDestination(Path(settings.lastDestination))
-        self._downloader.setNamingTemplate(TemplateType.IMAGE, settings.lastImageNamingTemplate)
-        self._downloader.setNamingTemplate(TemplateType.DESTINATION, settings.lastDestinationNamingTemplate)
+        self._downloader.setNamingTemplate(
+            TemplateType.IMAGE, settings.lastImageNamingTemplate
+        )
+        self._downloader.setNamingTemplate(
+            TemplateType.DESTINATION, settings.lastDestinationNamingTemplate
+        )
         self._downloader.setExtension(Case[settings.lastNamingExtension])
 
         self._splash.setProgress(100)
@@ -489,7 +526,10 @@ class QtMainView(QtWidgets.QMainWindow):
         text = f" {count} images" if count > 1 else f" 1 image" if count == 1 else ""
         self.downloadButton.setText(f"Download{text}")
         selOk = count > 0
-        dateOk = not self.downloadButton.datetimeRequired or self._sourceManager.selection.timelineBuilt
+        dateOk = (
+            not self.downloadButton.datetimeRequired
+            or self._sourceManager.selection.timelineBuilt
+        )
         self.downloadButton.setEnabled(selOk and dateOk)
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
@@ -526,11 +566,11 @@ class QtMainView(QtWidgets.QMainWindow):
         )
         try:
             Config.fotocopSettings.save()
-        except Config.settings.SettingsError:
+        except Config.settings.SettingsError as e:
             reply = QtWidgets.QMessageBox.question(
                 self,  # noqa
                 f"{QtWidgets.qApp.applicationName()} - Exit confirmation",
-                f"Cannot save the settings file {Config.fotocopSettings.settingsFile}: quit anyway?",
+                f"Cannot save the settings file ({e}): quit anyway?",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             )
             if reply == QtWidgets.QMessageBox.No:
@@ -550,21 +590,20 @@ class QtMainView(QtWidgets.QMainWindow):
         return super().eventFilter(obj, event)
 
 
-def QtMain():
+def QtMain() -> None:
     """Main Graphical Interface entry point.
 
     Retrieves settings, initiatizes the whole application logging. Then initializes
     a Qt Application and the application main view.
-    Display a splash screen during application initialization and start the
-    Qt main loop.
+    Display a splash screen during application initialization and start the Qt main loop.
     """
     # Retrieve the fotocop app settings.
     settings = Config.fotocopSettings
     resources = settings.resources
 
-    logFile = settings.appDirs.user_log_dir / "fotocop.log"
+    # Initialize and start the log server.
     logConfig = LogConfig(
-        logFile,
+        settings.appDirs.user_log_dir / "fotocop.log",
         settings.logLevel,
         logOnConsole=True,
     )
@@ -583,7 +622,7 @@ def QtMain():
     app.setStyle(QtUtil.MyAppStyle())
     app.setStyleSheet("QSplitter::handle { background-color: gray }")
     app.setApplicationName("Fotocop")
-    app.setAttribute(QtCore.Qt.AA_DisableWindowContextHelpButton)  # noqa
+    app.setAttribute(QtCore.Qt.AA_DisableWindowContextHelpButton)
     app.setWindowIcon(QtGui.QIcon(f"{resources}/fotocop.svg"))
     f = app.font()
     fSize = f.pointSize()
@@ -597,7 +636,7 @@ def QtMain():
     splash = QtUtil.SplashScreen(
         f"{resources}/splashscreen600.png",
         __about__.__version__,
-        QtCore.Qt.WindowStaysOnTopHint
+        QtCore.Qt.WindowStaysOnTopHint,
     )
     splash.show()
 
@@ -611,6 +650,7 @@ def QtMain():
 
     logger.info("Fotocop is closing...")
 
+    # Stop the log server.
     logConfig.stopLogging()
 
 

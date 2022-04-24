@@ -7,18 +7,17 @@ It provides:
     A Setting data descriptor to access the basic key/value pairs as class
         attributes (appSettings.keys['mySetting'] = value is replaced by
         appSettings.mySetting = value)
-    A getAppDir convenient function to retrieve the standard windows application
-    directories in 'C:\Users\<user>\AppData\<Local or Roaming>\<appName>'
+    A getAppDir convenient function to retrieve the standard windows' application
+        directories in '%LOCALAPPDATA%\<appName>'
 """
 import os
 import json
 from pathlib import Path
-from enum import Enum
-from typing import Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple, Any, Optional, Type, overload
 
 from fotocop.util.basicpatterns import Singleton
 
-__all__ = ['Settings', 'SettingsError', 'Setting', 'getAppDirs']
+__all__ = ["Settings", "SettingsError", "Setting", "WinAppDirs", "getAppDirs"]
 
 
 class PathEncoder(json.JSONEncoder):
@@ -27,7 +26,8 @@ class PathEncoder(json.JSONEncoder):
     The Path object is encoded into a string using its as_posix() method or into
     an empty string if the path name is not defined.
     """
-    def default(self, obj) -> str:
+
+    def default(self, obj: Any) -> str:
         """Overrides the JSONEncoder default encoding method.
 
         Non Path objects are passed to the JSONEncoder base class, raising a
@@ -40,45 +40,49 @@ class PathEncoder(json.JSONEncoder):
              The string-encoded Path object.
         """
         if isinstance(obj, Path):
-            return obj.as_posix() if obj.name else ''
+            return obj.as_posix() if obj.name else ""
         # Let the base class default method raise the TypeError
         return json.JSONEncoder.default(self, obj)
 
 
 class SettingsError(Exception):
-    """Exception raised on settings saving error.
-    """
+    """Exception raised on settings saving error."""
+
     pass
 
 
 class Settings(object, metaclass=Singleton):
     """A base class to handle persistent application settings.
 
-    Settings is a singleton: only one instance of settings may exists for an
+    Settings is a singleton: only one instance of settings may exist for an
     applcation.
-    Settings key/value pairs are read from / save to a JSON file given when
+    Settings key/value pairs are read from / save to a JSON file passed when
     creating the Settings instance.
     Settings interface mimics a (very) simplified Qt5 QSettings.
 
     Examples:
         appSettings = Settings('path/to/mySettingsFile.json')
         appSettings.setValue('mySetting', (100, 200))
-        appSettings.value('mySetting', defaultValue=(0,0))   # returns 100, 200
+        appSettings.value('mySetting', defaultValue=(0, 0))   # returns 100, 200
         appSettings.contains('mySetting')   # returns True
         appSettings.allKeys()   # returns ['mySetting']
         appSettings.remove('mySetting')
         appSettings.clear()
 
     Attributes:
-        settingsFile (Path): the path to the persistent settings file.
-        _keys (Dict[str, any]): the settings key/value pairs container.
+        _settingsFile: the path to the persistent settings file.
+        _keys: the settings key/value pairs container.
     """
-    def __init__(self, settingsFile: Path):
-        self.settingsFile = settingsFile.with_suffix('.json')
+
+    _keys: Dict[str, Any]
+    _settingsFile: Path
+
+    def __init__(self, settingsFile: Path) -> None:
+        self._settingsFile = settingsFile.with_suffix(".json")
 
         self._keys = self._load()
 
-    def _load(self) -> Dict:
+    def _load(self) -> Dict[str, Any]:
         """Intialize the settings from its persistent JSON file.
 
         Returns:
@@ -86,13 +90,13 @@ class Settings(object, metaclass=Singleton):
             loading errors.
         """
         try:
-            with self.settingsFile.open() as fh:
+            with self._settingsFile.open() as fh:
                 keys = json.load(fh)
             return keys
         except (FileNotFoundError, json.JSONDecodeError):
             return dict()
 
-    def save(self):
+    def save(self) -> None:
         """Save the settings key/value pairs on a JSON file.
 
         Use a dedicated JSONEncoder to handle pathlib.Path objects.
@@ -101,12 +105,12 @@ class Settings(object, metaclass=Singleton):
             A SettingsErrors exception on OS or JSON encoding errors.
         """
         try:
-            with self.settingsFile.open(mode='w') as fh:
+            with self._settingsFile.open(mode="w") as fh:
                 json.dump(self._keys, fh, indent=4, cls=PathEncoder)
         except (OSError, TypeError) as e:
             raise SettingsError(e)
 
-    def value(self, key: str, defaultValue: any = None) -> any:
+    def value(self, key: str, defaultValue: Any = None) -> Any:
         """Returns the value for setting key.
 
         If the setting doesn't exist, returns defaultValue. If no default value
@@ -114,14 +118,14 @@ class Settings(object, metaclass=Singleton):
 
         Args:
             key: The setting key to look for.
-            defaultValue: The default value to be returned if key does not exists.
+            defaultValue: The default value to be returned if key does not exist.
 
         Returns:
             The key value.
         """
         return self._keys.get(key, defaultValue)
 
-    def setValue(self, key: str, value: any):
+    def setValue(self, key: str, value: Any) -> None:
         """Sets the value of setting key to value.
 
         If the key already exists, the previous value is overwritten.
@@ -143,10 +147,10 @@ class Settings(object, metaclass=Singleton):
         """
         return key in self._keys
 
-    def remove(self, key: str):
+    def remove(self, key: str) -> None:
         """Removes the setting key.
 
-        No errors is raised if there is no setting called key.
+        No errors are raised if there is no setting called key.
 
         Args:
             key: the key to remove
@@ -154,7 +158,7 @@ class Settings(object, metaclass=Singleton):
         if key in self._keys:
             del self._keys[key]
 
-    def allKeys(self) -> List:
+    def allKeys(self) -> List[str]:
         """Returns a list of all keys that can be read using the Settings object.
 
         Returns:
@@ -162,7 +166,7 @@ class Settings(object, metaclass=Singleton):
         """
         return list(self._keys)
 
-    def clear(self):
+    def clear(self) -> None:
         """Removes all entries associated to this Settings object."""
         self._keys = dict()
 
@@ -176,7 +180,7 @@ class Setting(object):
 
     Examples:
         Class AppSettings(Settings):
-            mySetting = Setting(defaultValue=(0,0))
+            mySetting = Setting(defaultValue=(0, 0))
 
         appSettings = AppSettings('path/to/mySettingsFile.json')
         appSettings.mySetting   # returns 0, 0
@@ -184,29 +188,36 @@ class Setting(object):
         appSettings.mySetting   # returns 100, 200
 
     Attributes:
-        defaultValue (any): an optional default value for the setting.
-        key (str): the settings key/value pairs container.
+        defaultValue: an optional default value for the setting.
+        _key: the settings key in the key/value pairs container.
     """
-    def __init__(self, defaultValue: any = None):
+
+    _key: str
+    defaultValue: Optional[Any]
+
+    def __init__(self, defaultValue: Any = None) -> None:
         self.defaultValue = defaultValue
 
-    def __set_name__(self, owner: Settings, name: str):
+    def __set_name__(self, owner: Type[Settings], name: str) -> None:
         """Save the Setting instance name to use as a Settings key.
-
-        All created Setting descriptors'names are stored in a 'settings' list
-        attribute of the owner instance.
 
         Args:
             owner: The class where the Setting descriptor instance is created.
             name: the Setting descriptor instance name.
         """
-        self.key = name
-        if hasattr(owner, 'settings'):
-            owner.settings.append(name)
-        else:
-            owner.settings = [name]
+        self._key = name
 
-    def __get__(self, instance: Settings, owner: Settings):
+    @overload
+    def __get__(self, instance: None, owner: None) -> Any:
+        ...
+
+    @overload
+    def __get__(self, instance: Settings, owner: Type[Settings]) -> Any:
+        ...
+
+    def __get__(
+        self, instance: Optional[Settings], owner: Optional[Type[Settings]]
+    ) -> Any:
         """Descriptor getter.
 
         On get access, the descriptor returns the value associated to its key by
@@ -221,27 +232,24 @@ class Setting(object):
         """
         if instance is None:
             return self
-        return instance.value(self.key, self.defaultValue)
+        return instance.value(self._key, self.defaultValue)
 
-    def __set__(self, instance, value):
+    def __set__(self, instance: Settings, value: Any) -> None:
         """Descriptor setter.
 
         On set access, the descriptor set the value of its key by writing in
         the associated Settings instance key/value pair.
-        The instance shall support the model interface and provide a
-        'modelChanged' signal.
 
         Args:
-            instance (FotocopSettings): the Settings instance owning the Setting
-                descriptor
+            instance: the Settings instance owning the Setting descriptor.
             value: the value to set.
         """
-        instance.setValue(self.key, value)
-        # instance.modelChanged.emit()
+        instance.setValue(self._key, value)
 
 
 class WinAppDirs(NamedTuple):
     """Paths of the default Windows user directories for the application."""
+
     user_data_dir: Path
     user_config_dir: Path
     user_cache_dir: Path
@@ -251,13 +259,11 @@ class WinAppDirs(NamedTuple):
 def getAppDirs(appName: str, roaming: bool = False) -> WinAppDirs:
     r"""Returns the default Windows user directories for the application.
 
-    Win 7 (roaming):
-      ``C:\Users\<user>\AppData\Roaming\<appName>``
-    Win 7 (not roaming):
-      ``C:\Users\<user>\AppData\Local\<appName>``
+    Win 7 (roaming): %APPDATA%\<appName>
+    Win 7 (not roaming): %LOCALAPPDATA%\<appName>
 
-    Fallback to ``C:\Users\<user>\<appName>`` if the APPDATA or LOCALAPPDATA
-    Windows environment variables are not found.
+    Fallback to %HOMEPATH%\<appName> if the APPDATA or LOCALAPPDATA Windows environment
+    variables are not found.
     The directories are created if required.
 
     Args:
@@ -268,22 +274,23 @@ def getAppDirs(appName: str, roaming: bool = False) -> WinAppDirs:
     Returns:
         A WinAppDirs NamedTuple containing the user app directories paths.
     """
-    key = roaming and 'APPDATA' or 'LOCALAPPDATA'
+    key = roaming and "APPDATA" or "LOCALAPPDATA"
     folder = os.environ.get(key)
+
     if folder is None:
         folder = Path.home()
     folder = Path(folder)
+
     user_data_dir = folder / appName
     user_data_dir.mkdir(parents=True, exist_ok=True)
-    user_config_dir = folder / appName / 'Config'
+
+    user_config_dir = user_data_dir / "Config"
     user_config_dir.mkdir(parents=True, exist_ok=True)
-    user_cache_dir = folder / appName / 'Cache'
+
+    user_cache_dir = user_data_dir / "Cache"
     user_cache_dir.mkdir(parents=True, exist_ok=True)
-    user_log_dir = folder / appName / 'Logs'
+
+    user_log_dir = user_data_dir / "Logs"
     user_log_dir.mkdir(parents=True, exist_ok=True)
-    return WinAppDirs(
-        user_data_dir,
-        user_config_dir,
-        user_cache_dir,
-        user_log_dir
-    )
+
+    return WinAppDirs(user_data_dir, user_config_dir, user_cache_dir, user_log_dir)

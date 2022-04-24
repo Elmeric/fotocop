@@ -125,3 +125,6 @@ dmypy.json
 /workspace.xml
 /shelf/
 .idea/
+
+# Fotocop
+resources/

@@ -1,89 +1,75 @@
 import logging
-from typing import TYPE_CHECKING, Tuple, Optional, List
+from typing import TYPE_CHECKING, Tuple, Optional, List, Dict, Any
 from datetime import datetime
 from pathlib import Path
-from multiprocessing import Pipe, Event
-from threading import Thread
+from multiprocessing import Pipe
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton, DelegatedAttribute
+from fotocop.util.threadutil import ConnectionListener
 from fotocop.models import settings as Config
-from fotocop.models.sources import Image, Datation
+from fotocop.models.sources import Image, ImageProperty
 from fotocop.models.naming import (Case, TemplateType, NamingTemplates)
 from fotocop.models.imagesmover import ImageMover
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import Selection
+    from fotocop.models.sources import Selection, ImageKey
 
 logger = logging.getLogger(__name__)
 
 
-class ImageMoverListener(Thread):
+class ImageMoverListener(ConnectionListener):
     def __init__(self, conn):
-        super().__init__()
-        self.name = "ImageMoverListener"
-        self._imageMoverConnection = conn
-        self._alive = Event()
+        super().__init__(conn, name="ImageMoverListener")
 
-    def run(self):
-        self._alive.set()
-        while self._alive.is_set():
-            try:
-                if self._imageMoverConnection.poll(timeout=0.01):
-                    content, *data = self._imageMoverConnection.recv()
-                    downloader = Downloader()
+    def handleMessage(self, msg: Any) -> None:
+        content, *data = msg
+        downloader = Downloader()
 
-                    if content == "image_preview":
-                        sampleName, samplePath = data
-                        logger.debug(
-                            f"Received image sample preview: {sampleName}, {samplePath}"
-                        )
-                        downloader.imageSampleChanged.emit(
-                            sampleName,
-                            Path(samplePath).as_posix()
-                        )
+        if content == "image_preview":
+            sampleName, samplePath = data
+            logger.debug(
+                f"Received image sample preview: {sampleName}, {samplePath}"
+            )
+            downloader.imageSampleChanged.emit(
+                sampleName,
+                Path(samplePath).as_posix()
+            )
 
-                    elif content == "folder_preview":
-                        previewFolders, *_ = data
-                        logger.debug(
-                            f"Received folder preview: {previewFolders}"
-                        )
-                        downloader.folderPreviewChanged.emit(previewFolders)
+        elif content == "folder_preview":
+            previewFolders, *_ = data
+            logger.debug(
+                f"Received folder preview: {previewFolders}"
+            )
+            downloader.folderPreviewChanged.emit(previewFolders)
 
-                    elif content == "selected_images_count":
-                        selectedImagesCount, *_ = data
-                        logger.debug(
-                            f"{selectedImagesCount} images to download"
-                        )
-                        downloader.backgroundActionStarted.emit(
-                            f"Downloading {selectedImagesCount} images...", selectedImagesCount
-                        )
+        elif content == "selected_images_count":
+            selectedImagesCount, *_ = data
+            logger.debug(
+                f"{selectedImagesCount} images to download"
+            )
+            downloader.backgroundActionStarted.emit(
+                f"Downloading {selectedImagesCount} images...", selectedImagesCount
+            )
 
-                    elif content == "downloaded_images_count":
-                        downloadedImagesCount, *_ = data
-                        downloader.backgroundActionProgressChanged.emit(
-                            downloadedImagesCount
-                        )
+        elif content == "downloaded_images_count":
+            downloadedImagesCount, *_ = data
+            downloader.backgroundActionProgressChanged.emit(
+                downloadedImagesCount
+            )
 
-                    elif content == "download_completed":
-                        downloadedImagesCount, downloadedImagesInfo = data
-                        downloader.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
-                        downloader.backgroundActionCompleted.emit(downloadedImagesCount)
+        elif content == "download_completed":
+            downloadedImagesCount, downloadedImagesInfo = data
+            downloader.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
+            downloader.backgroundActionCompleted.emit(downloadedImagesCount)
 
-                    elif content == "download_cancelled":
-                        downloadedImagesCount, downloadedImagesInfo = data
-                        downloader.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
-                        downloader.backgroundActionCompleted.emit(downloadedImagesCount)
+        elif content == "download_cancelled":
+            downloadedImagesCount, downloadedImagesInfo = data
+            downloader.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
+            downloader.backgroundActionCompleted.emit(downloadedImagesCount)
 
-                    else:
-                        logger.warning(f"Received unknown content: {content}")
-
-            except (OSError, EOFError, BrokenPipeError):
-                self._alive.clear()
-
-    def join(self, timeout=None):
-        self._alive.clear()
-        super().join(timeout)
+        else:
+            logger.warning(f"Received unknown content: {content}")
 
 
 class Downloader(metaclass=Singleton):
@@ -119,7 +105,7 @@ class Downloader(metaclass=Singleton):
 
         self._namingTemplates = namingTemplates
         self._source: Optional["Selection"] = None
-        self._imageSample = self._makeDefaultImageSample()
+        self._imageSample = None
 
         # Start the images' mover process and establish a Pipe connection with it
         logger.info("Starting images mover...")
@@ -133,39 +119,44 @@ class Downloader(metaclass=Singleton):
         self._imagesMoverListener = ImageMoverListener(imageMoverConnection)
         self._imagesMoverListener.start()
 
-        self._updatePreview(imageOnly=True)
-
     def setSourceSelection(self, selection: "Selection"):
-        """Call on SourceManager.sourceSelected(Selection) signal"""
+        """Call on SourceManager.sourceSelected signal."""
         self._source = selection
-        self._updateImages()
+        self._imageSample = selection.imageSample
+        self._imageMoverConnection.send(
+            (ImageMover.Command.CLEAR_IMAGES, 0)
+        )
+        self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
+        self._imageMoverConnection.send(
+            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
+        )
+
+    def addImages(self, images: Dict["ImageKey", "Image"]) -> None:
+        self._imageMoverConnection.send((ImageMover.Command.ADD_IMAGES, images))
+
+    def updateImagesInfo(
+            self,
+            imageKeys: List["ImageKey"],
+            pty: "ImageProperty",
+            value
+    ) -> None:
+        """Call on SourceManager.imagesInfoChanged signal."""
+        self._imageMoverConnection.send(
+            (ImageMover.Command.UPDATE_IMAGES_INFO, imageKeys, pty, value)
+        )
+        if pty is ImageProperty.SESSION:
+            self._imageMoverConnection.send(
+                (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
+            )
+        if self._source is not None and self._source.timelineBuilt:
+            self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
 
     def updateImageSample(self):
-        """Call on SourceManager.sourceSelected(Selection) and SourceManager.timelineBuilt() signals"""
-        source = self._source
-        if source is None:
-            return
-
-        self._updateImages()
-        images = self._source.images
-        # By SourceManager design, self._source cannot be None, but images may be an
-        # empty dict when the selection is empty.
-        if len(images) > 0:
-            # A source with at least one image is selected: get the first one if dated.
-            imageKey = next(iter(images))
-            image = images[imageKey]
-            if image.isLoaded:
-                self._imageSample = images[imageKey]
-            else:
-                # Images are not yet dated: create our own image sample.
-                self._imageSample = self._makeDefaultImageSample()
-        else:
-            # No source or an empty source is selected: create our own image sample.
-            self._imageSample = self._makeDefaultImageSample()
-        logger.debug(f"Image sample is now: {self._imageSample.name} "
-                     f"in {self._imageSample.path} "
-                     f"with date {self._imageSample.datetime}")
-        self._updatePreview(imageOnly=False)
+        """Call on SourceManager.imageSampleChanged signal."""
+        self._imageSample = self._source.imageSample
+        self._imageMoverConnection.send(
+            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
+        )
 
     def selectDestination(self, destination: Path) -> None:
         self.destination = destination
@@ -176,11 +167,13 @@ class Downloader(metaclass=Singleton):
     def setNamingTemplate(self, kind: "TemplateType", key: str):
         if kind == TemplateType.IMAGE:
             self._setImageNamingTemplate(key)
-            self._updatePreview(imageOnly=True)
+            self._imageMoverConnection.send(
+                (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
+            )
         else:
             assert kind == TemplateType.DESTINATION
             self._setDestinationNamingTemplate(key)
-            self._updatePreview(imageOnly=False)
+            self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
 
     def setExtension(self, extensionKind: Case):
         template = self.imageNamingTemplate
@@ -188,7 +181,9 @@ class Downloader(metaclass=Singleton):
         Config.fotocopSettings.lastNamingExtension = extensionKind.name
         self._imageMoverConnection.send((ImageMover.Command.SET_IMG_TPL, template))
         self.imageNamingExtensionSelected.emit(extensionKind)
-        self._updatePreview(imageOnly=False)
+        self._imageMoverConnection.send(
+            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
+        )
 
     def download(self) -> None:
         self._imageMoverConnection.send((ImageMover.Command.DOWNLOAD, 0))
@@ -234,37 +229,6 @@ class Downloader(metaclass=Singleton):
         self._imageMoverConnection.send((ImageMover.Command.SET_DEST_TPL, template))
         self.destinationNamingTemplateSelected.emit(key)
         self._checkRequiredInfos()
-
-    def _updateImages(self) -> None:
-        source = self._source
-        if source is None:
-            return
-
-        self._imageMoverConnection.send(
-            (ImageMover.Command.SET_IMAGES, self._source.images)
-        )
-
-    def _updatePreview(self, imageOnly: bool = False) -> None:
-        # Update image sample name and path.
-        self._imageMoverConnection.send(
-            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
-        )
-
-        if imageOnly:
-            return
-
-        # Update folders preview
-        self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
-
-    @staticmethod
-    def _makeDefaultImageSample() -> "Image":
-        imageSample = Image("IMG_0001.RAF", "L:/path/to/images")
-        d = datetime.today()
-        imageSample.datetime = Datation(
-            str(d.year), str(d.month), str(d.day),
-            str(d.hour), str(d.minute), str(d.second)
-        )
-        return imageSample
 
     def _checkRequiredInfos(self):
         sessionRequired = self.imageNamingTemplate.sessionRequired or self.destinationNamingTemplate.sessionRequired

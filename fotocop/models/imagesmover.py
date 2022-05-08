@@ -1,6 +1,6 @@
 import logging
 import json
-from typing import Tuple, Optional, List, Dict
+from typing import TYPE_CHECKING, Tuple, Optional, List, Dict
 from multiprocessing import Process, Event
 from enum import Enum, auto
 from datetime import datetime, date
@@ -11,7 +11,10 @@ from fotocop.util.threadutil import StoppableThread
 from fotocop.util.pathutil import Path
 from fotocop.models import settings as Config
 from fotocop.models.naming import TemplateType, NamingTemplate
-from fotocop.models.sources import Image
+from fotocop.models.sources import ImageProperty
+
+if TYPE_CHECKING:
+    from fotocop.models.sources import ImageKey, Image
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +163,7 @@ class Sequences:
 class DownloadHandler(StoppableThread):
     def __init__(
             self,
-            selectedImages: List[Image],
+            selectedImages: List["Image"],
             destination: Path,
             imageNamingTemplate: NamingTemplate,
             destinationNamingTemplate: NamingTemplate,
@@ -261,13 +264,20 @@ class DownloadHandler(StoppableThread):
 
 
 class ImageMover(Process):
+    ATTR_MAP = {
+        ImageProperty.DATETIME: "datetime",
+        ImageProperty.IS_SELECTED: "isSelected",
+        ImageProperty.SESSION: "session",
+    }
 
     class Command(Enum):
         STOP = auto()
         SET_DEST = auto()
         SET_IMG_TPL = auto()
         SET_DEST_TPL = auto()
-        SET_IMAGES = auto()
+        CLEAR_IMAGES = auto()
+        ADD_IMAGES = auto()
+        UPDATE_IMAGES_INFO = auto()
         GET_IMG_PREVIEW = auto()
         GET_FOLDERS_PREVIEW = auto()
         DOWNLOAD = auto()
@@ -295,7 +305,7 @@ class ImageMover(Process):
         self._destination: Optional[Path] = None
         self._imageNamingTemplate: Optional[NamingTemplate] = None
         self._destinationNamingTemplate: Optional[NamingTemplate] = None
-        self._images: List[Image] = list()
+        self._images: Dict["ImageKey", "Image"] = dict()
 
         self._downloadHandler = None
 
@@ -322,7 +332,7 @@ class ImageMover(Process):
         """
         # Check for command on the process connection
         if self._conn.poll():
-            action, args = self._conn.recv()
+            action, *args = self._conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping images mover...")
@@ -330,24 +340,32 @@ class ImageMover(Process):
                 self._exitProcess.set()
             elif action == self.Command.SET_DEST:
                 # Update the ImageMover context with the destination path
-                logger.debug(f"Update context, Destination is {args}...")
-                self._setDestination(args)
+                logger.debug(f"Update context, Destination is {args[0]}...")
+                self._setDestination(*args)
             elif action == self.Command.SET_IMG_TPL:
                 # Update the ImageMover context with the selected images naming template
-                logger.debug(f"Update context, Images naming template is {args.name}...")
-                self._setNamingTemplate(TemplateType.IMAGE, args)
+                logger.debug(f"Update context, Images naming template is {args[0].name}...")
+                self._setNamingTemplate(TemplateType.IMAGE, *args)
             elif action == self.Command.SET_DEST_TPL:
                 # Update the ImageMover context with the selected destination naming template
-                logger.debug(f"Update context, Destination naming template is {args.name}...")
-                self._setNamingTemplate(TemplateType.DESTINATION, args)
-            elif action == self.Command.SET_IMAGES:
+                logger.debug(f"Update context, Destination naming template is {args[0].name}...")
+                self._setNamingTemplate(TemplateType.DESTINATION, *args)
+            elif action == self.Command.CLEAR_IMAGES:
+                # Clear images in the ImageMover context.
+                logger.debug(f"Clear images in context...")
+                self._images = dict()
+            elif action == self.Command.ADD_IMAGES:
                 # Update the ImageMover context with the images in the selected source.
-                logger.debug(f"Update context, {len(args)} images...")
-                self._setImages(args)
+                logger.debug(f"Update context, adding {len(args[0])} images...")
+                self._addImages(*args)
+            elif action == self.Command.UPDATE_IMAGES_INFO:
+                # Update images info to the passed value for passed image keys and info kind.
+                logger.debug(f"Update images info {args[1]} for {len(args[0])} images...")
+                self._updateImagesInfo(*args)
             elif action == self.Command.GET_IMG_PREVIEW:
                 # Reply with preview of the given image sample according to the current context
                 logger.debug("Compute and publish image sample preview...")
-                self._publishImagePreview(args)
+                self._publishImagePreview(*args)
             elif action == self.Command.GET_FOLDERS_PREVIEW:
                 # Reply with preview of the "where to download folders" according to the
                 # current context
@@ -355,11 +373,11 @@ class ImageMover(Process):
                 self._publishFolderPreview()
             elif action == self.Command.DOWNLOAD:
                 # Rename and download the selected image.
-                logger.debug("Rename and download the selected images...")
+                logger.info("Rename and download the selected images...")
                 self._download()
             elif action == self.Command.CANCEL:
                 # Cancel the current download.
-                logger.debug("Download cancelled...")
+                logger.info("Download cancelled...")
                 self._stopDownloading()
             elif action == self.Command.SAVE_SEQ:
                 # Save the Sequences state to persistent file.
@@ -378,18 +396,33 @@ class ImageMover(Process):
             assert kind == TemplateType.DESTINATION
             self._destinationNamingTemplate = template
 
-    def _setImages(self, images: Dict[str, Image]) -> None:
-        selectedImages = [
-            image
-            for image in images.values()
-            if image.isLoaded and image.isSelected
-        ]
-        self._images = selectedImages
+    def _addImages(self, images: Dict["ImageKey", "Image"]) -> None:
+        self._images.update(images)
+
+    def _updateImagesInfo(
+            self,
+            imageKeys: List["ImageKey"],
+            pty: "ImageProperty",
+            value
+    ) -> None:
+        try:
+            attr = ImageMover.ATTR_MAP[pty]
+        except KeyError:
+            logger.warning(f"Cannot update images info: {pty.name} is unknown")
+
+        else:
+            for imageKey in imageKeys:
+                try:
+                    image = self._images[imageKey]
+                except KeyError:
+                    logger.warning(f"Cannot update image info: {imageKey} is not found")
+                else:
+                    setattr(image, attr, value)
 
     def _publishImagePreview(self, image: "Image") -> None:
         imageTemplate = self._imageNamingTemplate
         destinationTemplate = self._destinationNamingTemplate
-        if imageTemplate is not None and destinationTemplate is not None:
+        if image is not None and imageTemplate is not None and destinationTemplate is not None:
             sequences = self._sequences
             sampleName = self._imageNamingTemplate.format(image, sequences, datetime.now())
             samplePath = self._destinationNamingTemplate.format(
@@ -400,22 +433,23 @@ class ImageMover(Process):
     def _publishFolderPreview(self) -> None:
         previewFolders = set()
         seen = list()
-        for image in self._images:
-            path = Path(
-                self._destinationNamingTemplate.format(
-                    image, self._sequences, datetime.now(), TemplateType.DESTINATION
+        for image in self._images.values():
+            if image.isLoaded and image.isSelected:
+                path = Path(
+                    self._destinationNamingTemplate.format(
+                        image, self._sequences, datetime.now(), TemplateType.DESTINATION
+                    )
                 )
-            )
-            folder = self._destination
-            absPath = folder / path
-            if absPath in seen:
-                continue
-            seen.append(absPath)
-            previewFolders.add(absPath.as_posix())
+                folder = self._destination
+                absPath = folder / path
+                if absPath in seen:
+                    continue
+                seen.append(absPath)
+                previewFolders.add(absPath.as_posix())
         _publishData(self._conn, "folder_preview", previewFolders)
 
     def _download(self) -> None:
-        selectedImages = [image for image in self._images if image.isSelected]
+        selectedImages = [image for image in self._images.values() if image.isSelected]
         logger.debug(f"Start a new download handler")
         self._downloadHandler = DownloadHandler(
             selectedImages,

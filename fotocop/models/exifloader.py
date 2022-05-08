@@ -1,12 +1,14 @@
 import logging
 import base64
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 from multiprocessing import Process, Event
 from enum import Enum, auto
 
 from fotocop.util import exiftool
 from fotocop.util.logutil import LogConfig, configureRootLogger
 
+if TYPE_CHECKING:
+    from fotocop.models.sources import ImageKey
 logger = logging.getLogger(__name__)
 
 
@@ -65,31 +67,27 @@ class ExifLoader(Process):
         """
         # Check for command on the process connection
         if self.conn.poll():
-            action, image = self.conn.recv()
+            action, imageKey = self.conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping exif loader...")
                 self.exitProcess.set()
             elif action == self.Command.LOAD_ALL:
                 # Load date/time and thumbnail
-                name, path = image
-                logger.debug(f"Loading date and thumbnail from exif for {name}...")
-                self.loadExif(image)
+                logger.debug(f"Loading date and thumbnail from exif for {imageKey}...")
+                self.loadExif(imageKey)
             elif action == self.Command.LOAD_THUMB:
                 # Load thumbnail
-                name, path = image
-                logger.debug(f"Loading thumbnail from exif for {name}...")
-                self.loadThumbnail(image)
+                logger.debug(f"Loading thumbnail from exif for {imageKey}...")
+                self.loadThumbnail(imageKey)
             elif action == self.Command.LOAD_DATE:
                 # Load date/time
-                name, path = image
-                logger.debug(f"Loading date time from exif for {name}...")
-                self.loadDatetime(image)
+                logger.debug(f"Loading date time from exif for {imageKey}...")
+                self.loadDatetime(imageKey)
             else:
                 logger.warning(f"Unknown command {action.name} ignored")
 
-    def loadExif(self, image: Tuple[str, str]):
-        name, path = image
+    def loadExif(self, imageKey: "ImageKey"):
         exif = self.exifTool.get_tags(
             [
                 "EXIF:ThumbnailImage",
@@ -101,7 +99,7 @@ class ExifLoader(Process):
                 "EXIF:Orientation",
                 "EXIF:DateTimeOriginal",
             ],
-            path,
+            imageKey,
         )
         dateTime = None
         try:
@@ -115,7 +113,7 @@ class ExifLoader(Process):
             dateTime = (year, month, day, hour, minute, second)  # noqa
         else:
             dateTime = ('1970', '01', '01', '00', '00', '00')
-        self.publishDateTime(dateTime, path)
+        self.publishDateTime(dateTime, imageKey)
 
         try:
             imgstring = exif["EXIF:ThumbnailImage"]
@@ -149,16 +147,15 @@ class ExifLoader(Process):
         except KeyError:
             orientation = 0
 
-        thumbData = (None, 0, 0)
+        thumbData = (b"", aspectRatio, orientation)
         if imgstring:
             imgstring = imgstring[7:]
             imgdata = base64.b64decode(imgstring)
             thumbData = (imgdata, aspectRatio, orientation)
 
-        self.publishThumbnail(thumbData, path)
+        self.publishThumbnail(thumbData, imageKey)
 
-    def loadThumbnail(self, image: Tuple[str, str]):
-        name, path = image
+    def loadThumbnail(self, imageKey: "ImageKey"):
         exif = self.exifTool.get_tags(
             [
                 "EXIF:ThumbnailImage",
@@ -169,7 +166,7 @@ class ExifLoader(Process):
                 "EXIF:ExifImageHeight",
                 "EXIF:Orientation",
             ],
-            path,
+            imageKey,
         )
 
         try:
@@ -204,17 +201,16 @@ class ExifLoader(Process):
         except KeyError:
             orientation = 0
 
-        thumbData = (None, 0, 0)
+        thumbData = (b"", 0, 0)
         if imgstring:
             imgstring = imgstring[7:]
             imgdata = base64.b64decode(imgstring)
             thumbData = (imgdata, aspectRatio, orientation)
 
-        self.publishThumbnail(thumbData, path)
+        self.publishThumbnail(thumbData, imageKey)
 
-    def loadDatetime(self, image: Tuple[str, str]):
-        name, path = image
-        dateTime = self.exifTool.get_tag("EXIF:DateTimeOriginal", path)
+    def loadDatetime(self, imageKey: "ImageKey"):
+        dateTime = self.exifTool.get_tag("EXIF:DateTimeOriginal", imageKey)
         if dateTime:  # "YYYY:MM:DD HH:MM:SS"
             date, time_ = dateTime.split(" ", 1)
             year, month, day = date.split(":")
@@ -222,9 +218,13 @@ class ExifLoader(Process):
             dateTime = (year, month, day, hour, minute, second)  # noqa
         else:
             dateTime = ('1970', '01', '01', '00', '00', '00')
-        self.publishDateTime(dateTime, path)
+        self.publishDateTime(dateTime, imageKey)
 
-    def publishDateTime(self, datetime: Tuple[str, str, str, str, str, str], imageKey: str):
+    def publishDateTime(
+            self,
+            datetime: Tuple[str, str, str, str, str, str],
+            imageKey: "ImageKey"
+    ):
         data = (f"datetime", datetime, imageKey)
         try:
             self.conn.send(data)
@@ -232,7 +232,7 @@ class ExifLoader(Process):
         except (OSError, EOFError, BrokenPipeError):
             pass
 
-    def publishThumbnail(self, thumbnail: tuple, imageKey: str):
+    def publishThumbnail(self, thumbnail: tuple, imageKey: "ImageKey"):
         data = (f"thumbnail", thumbnail, imageKey)
         try:
             self.conn.send(data)

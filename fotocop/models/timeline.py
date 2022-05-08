@@ -465,7 +465,7 @@ class TimelineNode(nd.NodeMixin):
         return f"{self.asText}: {self.weight}"
 
     def _post_attach(self, parent: "TimelineNode"):
-        """Method call after attaching to `parent` to sort children."""
+        """Method called after attaching to `parent` to sort children."""
         parent._NodeMixin__children = sorted(parent.children)
 
     def childByKey(self, key: str) -> Optional["TimelineNode"]:

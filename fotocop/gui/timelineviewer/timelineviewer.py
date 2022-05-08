@@ -1,14 +1,16 @@
-from typing import Dict, TYPE_CHECKING
+from enum import Enum
+from typing import Dict, TYPE_CHECKING, List
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 
-from fotocop.models.sources import Selection
+from fotocop.models.sources import Selection, ImageProperty
 from . import tlv
 from .timelinescene import YearScene, MonthScene, DayScene
 from .timelineview import TimelineView
 
 if TYPE_CHECKING:
+    from fotocop.models.sources import Datation, ImageKey
     from .timelinescene import TimelineScene
 
 
@@ -55,6 +57,8 @@ class TimelineViewer(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self._count = 0
+
         # Build an empty scene for each available zoom levels.
         # Propagate the hovered node to other widgets (e.g. ThumbnailViewer).
         self._scenes: Dict[tlv.ZoomLevel, TimelineScene] = dict()
@@ -87,7 +91,7 @@ class TimelineViewer(QtWidgets.QWidget):
         self._setScene(tlv.DEFAULT_ZOOM_LEVEL)
 
     @QtCore.pyqtSlot(Selection)
-    def setTimeline(self, sourceSelection: Selection):
+    def setTimeline(self, sourceSelection: "Selection"):
         """Initiate the timeline model of the scene for each zoom level.
 
         The timeline is the one of the selected images' source (None if no source is
@@ -107,16 +111,27 @@ class TimelineViewer(QtWidgets.QWidget):
             self.timeRangeChanged
         )
 
-    @QtCore.pyqtSlot()
-    def updateTimeline(self):
+    @QtCore.pyqtSlot(list, Enum, object)
+    def updateTimeline(
+            self,
+            _imageKeys: List["ImageKey"],
+            pty: "ImageProperty",
+            _datetime_: "Datation"
+    ) -> None:
         """Update the timeline scene for the current zoom level and display it in the view.
 
         As each scene is cleared before affecting the one corresponding to the current
         zoom level to the timeline view for display, it will be re-populated at each
         update.
         """
-        self._clearScenes()
-        self._setScene(self.zoomLevel())
+        if pty is not ImageProperty.DATETIME:
+            return
+
+        self._count += 1
+        if self._count >= 100:
+            self._count = 0
+            self._clearScenes()
+            self._setScene(self.zoomLevel())
 
     @QtCore.pyqtSlot()
     def finalizeTimeline(self):
@@ -124,6 +139,7 @@ class TimelineViewer(QtWidgets.QWidget):
 
         As each scene is cleared before update, they will be re-populated.
         """
+        self._count = 0
         self._clearScenes()
         for zoomLevel in tlv.ZoomLevel:
             self._scenes[zoomLevel].populate()

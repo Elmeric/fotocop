@@ -3,7 +3,9 @@
 import sys
 import os
 import logging
+from typing import TYPE_CHECKING, List
 from pathlib import Path
+from enum import Enum
 
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
@@ -15,7 +17,7 @@ from fotocop.util import qtutil as QtUtil
 
 # Models
 from fotocop.models import settings as Config
-from fotocop.models.sources import SourceManager, SourceType, Selection
+from fotocop.models.sources import SourceManager, SourceType, Selection, ImageProperty
 from fotocop.models.downloader import Downloader
 from fotocop.models.naming import Case, TemplateType
 
@@ -28,6 +30,9 @@ from .renamepanel import RenamePanel
 from .destinationpanel import DestinationPanel
 from .download import DownloadButton, DownloadProgress
 from .sessioneditor import SessionEditor
+
+if TYPE_CHECKING:
+    from fotocop.models.sources import ImageKey
 
 __all__ = ["QtMain"]
 
@@ -90,40 +95,27 @@ class QtMainView(QtWidgets.QMainWindow):
             parent=self,
         )
 
-        self._sourceManager.sourceEnumerated.connect(sourceSelector.displaySources)
+        self._sourceManager.sourcesChanged.connect(sourceSelector.displaySources)
 
         self._sourceManager.sourceSelected.connect(sourceSelector.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(self.displaySelectedSource)
         self._sourceManager.sourceSelected.connect(thumbnailViewer.setSourceSelection)
         self._sourceManager.sourceSelected.connect(timelineViewer.setTimeline)
         self._sourceManager.sourceSelected.connect(self._downloader.setSourceSelection)
-        self._sourceManager.sourceSelected.connect(self._downloader.updateImageSample)
-        self._sourceManager.sourceSelected.connect(self._updateDownloadButtonText)
 
         self._sourceManager.imagesBatchLoaded.connect(thumbnailViewer.addImages)
+        self._sourceManager.imagesBatchLoaded.connect(self._downloader.addImages)
 
         self._sourceManager.thumbnailLoaded.connect(thumbnailViewer.updateImage)
 
-        self._sourceManager.datetimeLoaded.connect(timelineViewer.updateTimeline)
+        self._sourceManager.imagesInfoChanged.connect(timelineViewer.updateTimeline)
+        self._sourceManager.imagesInfoChanged.connect(self._downloader.updateImagesInfo)
+        self._sourceManager.imagesInfoChanged.connect(self.updateDownloadButtonText)
+        self._sourceManager.imagesInfoChanged.connect(thumbnailViewer.updateToolbar)
 
         self._sourceManager.timelineBuilt.connect(timelineViewer.finalizeTimeline)
-        self._sourceManager.timelineBuilt.connect(thumbnailViewer.activateDateFilter)
-        self._sourceManager.timelineBuilt.connect(self._downloader.updateImageSample)
-        self._sourceManager.timelineBuilt.connect(self._updateDownloadButtonText)
 
-        self._sourceManager.imagesSelectionChanged.connect(
-            self._downloader.updateImageSample
-        )
-        self._sourceManager.imagesSelectionChanged.connect(
-            self._updateDownloadButtonText
-        )
-        self._sourceManager.imagesSelectionChanged.connect(
-            thumbnailViewer.updateSelStatus
-        )
-
-        self._sourceManager.imagesSessionChanged.connect(
-            self._downloader.updateImageSample
-        )
+        self._sourceManager.imageSampleChanged.connect(self._downloader.updateImageSample)
 
         self._downloader.imageNamingTemplateSelected.connect(
             renamePanel.imageNamingTemplateSelected
@@ -339,7 +331,6 @@ class QtMainView(QtWidgets.QMainWindow):
         self.move(settings.windowPosition[0], settings.windowPosition[1])
         self.resize(settings.windowSize[0], settings.windowSize[1])
 
-        self._sourceManager.selectLastSource(settings.lastSource)
         self._downloader.selectDestination(Path(settings.lastDestination))
         self._downloader.setNamingTemplate(
             TemplateType.IMAGE, settings.lastImageNamingTemplate
@@ -391,7 +382,7 @@ class QtMainView(QtWidgets.QMainWindow):
         return True
 
     @QtCore.pyqtSlot(Selection)
-    def displaySelectedSource(self, selection: Selection) -> None:
+    def displaySelectedSource(self, selection: "Selection") -> None:
         """Update the sourceSelector widgets on source selection.
 
         Call when the source manager signals that a source is selected. The selected
@@ -417,7 +408,7 @@ class QtMainView(QtWidgets.QMainWindow):
             self.sourceLbl.setToolTip(toolTip)
             self.sourceLbl.setStatusTip(toolTip)
 
-        elif kind == SourceType.DRIVE:
+        elif kind == SourceType.LOGICAL_DISK:
             icon = SourceSelector.DRIVE_ICON.get(source.kind, "drive.png")
             self.sourcePix.setPixmap(
                 QtGui.QPixmap(f"{resources}/{icon}").scaledToHeight(
@@ -446,6 +437,8 @@ class QtMainView(QtWidgets.QMainWindow):
             self.sourceLbl.setText("Select a source")
             self.sourceLbl.setToolTip("")
             self.sourceLbl.setStatusTip("")
+
+        self.updateDownloadButtonText([], ImageProperty.IS_SELECTED, True)
 
     @QtCore.pyqtSlot()
     def doDownloadAction(self):
@@ -503,11 +496,7 @@ class QtMainView(QtWidgets.QMainWindow):
     def downloadButtonClicked(self) -> None:
         if self.downloadButton.sessionRequired:
             sourceSelection = self._sourceManager.selection
-            imageKeys = [
-                key
-                for key, image in sourceSelection.images.items()
-                if image.isSelected and not image.session
-            ]
+            imageKeys = sourceSelection.getImagesRequiringSession()
             if imageKeys:
                 dialog = SessionEditor(imagesCount=len(imageKeys), parent=self)
                 if dialog.exec():
@@ -520,17 +509,25 @@ class QtMainView(QtWidgets.QMainWindow):
 
         self._downloader.download()
 
-    @QtCore.pyqtSlot()
-    def _updateDownloadButtonText(self) -> None:
-        count = self._sourceManager.selection.selectedImagesCount
-        text = f" {count} images" if count > 1 else f" 1 image" if count == 1 else ""
-        self.downloadButton.setText(f"Download{text}")
-        selOk = count > 0
-        dateOk = (
-            not self.downloadButton.datetimeRequired
-            or self._sourceManager.selection.timelineBuilt
-        )
-        self.downloadButton.setEnabled(selOk and dateOk)
+    @QtCore.pyqtSlot(list, Enum, object)
+    def updateDownloadButtonText(
+            self,
+            _imageKeys: List["ImageKey"],
+            pty: "ImageProperty",
+            _value
+    ) -> None:
+        source = self._sourceManager.selection
+        timelineBuilt = source.timelineBuilt
+        if pty is ImageProperty.IS_SELECTED or (pty is ImageProperty.DATETIME and timelineBuilt):
+            count = source.selectedImagesCount
+            text = f" {count} images" if count > 1 else f" 1 image" if count == 1 else ""
+            self.downloadButton.setText(f"Download{text}")
+            selOk = count > 0
+            dateOk = (
+                not self.downloadButton.datetimeRequired
+                or timelineBuilt
+            )
+            self.downloadButton.setEnabled(selOk and dateOk)
 
     def keyPressEvent(self, e: QtGui.QKeyEvent):
         """Trap the Escape key to close the application.

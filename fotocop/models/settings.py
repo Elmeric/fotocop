@@ -27,7 +27,7 @@ class FotocopSettings(settings.Settings):
             settings,
 
     Class attributes:
-        lastSource: key and info (id, kind, path and subDirs) on the last opened
+        lastSource: key and info (kind, id, path and subDirs) on the last opened
             images' source.
         lastDestination: path to the last selected images' destination.
         lastImageNamingTemplate: key of the last selected images' naming template.
@@ -50,7 +50,7 @@ class FotocopSettings(settings.Settings):
 
     _DEFAULT_LOGLEVEL = "INFO"
 
-    lastSource: Setting = settings.Setting(defaultValue=(None, "UNKNOWN", None, None))
+    lastSource: Setting = settings.Setting(defaultValue=("UNKNOWN", None, None, None))
     lastDestination: Setting = settings.Setting(
         defaultValue=shell.SHGetFolderPath(0, shellcon.CSIDL_MYPICTURES, None, 0)
     )

@@ -7,11 +7,11 @@ import PyQt5.QtGui as QtGui
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.models import settings as Config
-from fotocop.models.sources import SourceType, DriveType, Selection
+from fotocop.models.sources import Device, DriveType, Source
 from.fileexplorer import FileSystemView
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import SourceManager, Device, LogicalDisk
+    from fotocop.models.sources import SourceManager, LogicalDisk
     from .fileexplorer import FileSystemModel, FileSystemFilter, FileSystemDelegate
 
 
@@ -185,7 +185,7 @@ class SourceSelector(QtWidgets.QWidget):
 
         if not selected.indexes():
             # No device selected: clear any selected one by selecting an unknown device
-            manager.selectDevice("NOTHING")
+            manager.selectDevice(None)
             return
 
         # A device is selected: retrieve it.
@@ -219,7 +219,7 @@ class SourceSelector(QtWidgets.QWidget):
 
         if not selected.indexes():
             # No drive/folder selected: clear any selected drive by selecting an unknown drive
-            manager.selectLogicalDisk("NOTHING", Path())
+            manager.selectLogicalDisk(None, Path())
             return
 
         # A drive/folder is selected: retrieve its path.
@@ -238,25 +238,24 @@ class SourceSelector(QtWidgets.QWidget):
         # Select the new drive and folder
         manager.selectLogicalDisk(selectedDrive, path, self.subDirsChk.isChecked())
 
-    @QtCore.pyqtSlot(Selection)
-    def displaySelectedSource(self, selection: "Selection") -> None:
+    @QtCore.pyqtSlot(Source)
+    def displaySelectedSource(self, source: "Source") -> None:
         """Update the sourceSelector widgets on source selection.
 
         Call when the source manager signals that a source is selected. The selected
         source may be a Device or a LogicalDisk object, or unknown (none).
 
         Args:
-            selection: the source manager selection
+            source: the selected source of the source manager.
         """
         def scrollTo(t: FileSystemView, p: str) -> None:
             idx = t.model().mapFromSource(self._fsModel.index(p))
             t.scrollTo(idx, QtWidgets.QAbstractItemView.EnsureVisible)
 
-        source = selection.source
-        kind = selection.kind
+        media = source.media
 
-        if kind == SourceType.DEVICE:
-            caption = source.caption
+        if source.isDevice:
+            caption = media.caption
 
             item = self.devicesLst.findItems(caption, QtCore.Qt.MatchExactly)[0]
             index = self.devicesLst.indexFromItem(item)
@@ -264,19 +263,18 @@ class SourceSelector(QtWidgets.QWidget):
                 self.devicesLst.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
             self.devicesLst.setFocus()
 
-        elif kind == SourceType.LOGICAL_DISK:
+        elif source.isLogicalDisk:
             path = source.selectedPath
             posixPath = path.as_posix()
-            subDirs = source.subDirs
 
-            driveId = source.id
+            driveId = media.driveLetter
             header, tree = self._diskHeaders[driveId]
             header.expand()
             index = tree.model().mapFromSource(self._fsModel.index(str(path)))
             with QtCore.QSignalBlocker(tree.selectionModel()):
                 tree.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
             with QtCore.QSignalBlocker(self.subDirsChk):
-                self.subDirsChk.setChecked(subDirs)
+                self.subDirsChk.setChecked(source.subDirs)
             # First scrollTo to force directory loading.
             tree.scrollTo(index, QtWidgets.QAbstractItemView.EnsureVisible)
             if self._delayedScrollTo:
@@ -288,7 +286,7 @@ class SourceSelector(QtWidgets.QWidget):
             tree.setFocus()
 
         else:
-            assert kind == SourceType.UNKNOWN
+            assert source.isEmpty
             # Nothing to do
 
         self._delayedScrollTo = 0
@@ -332,7 +330,7 @@ class SourceSelector(QtWidgets.QWidget):
         self._diskHeaders.clear()
 
         for drive in logicalDisks:
-            driveId = drive.id
+            driveId = drive.driveLetter
             header = QtUtil.CollapsibleWidget(title=drive.caption, isCollapsed=True)
             tree = FileSystemView(self._fsModel)
             tree.setModel(self._fsFilter)

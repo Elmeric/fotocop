@@ -10,7 +10,7 @@ import PyQt5.QtGui as QtGui
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.rangeutil import runs
 from fotocop.models import settings as Config
-from fotocop.models.sources import Selection, ImageProperty
+from fotocop.models.sources import Source, ImageProperty
 from fotocop.models.timeline import TimeRange
 from .timelineviewer import tlv
 
@@ -43,7 +43,7 @@ class ImageModel(QtCore.QAbstractListModel):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._sourceSelection: Optional["Selection"] = None
+        self._sourceSelection: Optional["Source"] = None
         self._images: List["ImageKey"] = list()
         self.sessionRequired = False
 
@@ -164,8 +164,8 @@ class ImageModel(QtCore.QAbstractListModel):
 
         return False
 
-    def setSourceSelection(self, selection: "Selection") -> None:
-        self._sourceSelection = selection
+    def setSourceSelection(self, source: "Source") -> None:
+        self._sourceSelection = source
 
     def clearImages(self) -> None:
         self.beginResetModel()
@@ -635,12 +635,12 @@ class ThumbnailViewer(QtWidgets.QWidget):
         self.removeSessionBtn.setEnabled(False)
         self.zoomLevelSelector.setEnabled(False)
 
-    @QtCore.pyqtSlot(Selection)
-    def setSourceSelection(self, selection: "Selection") -> None:
+    @QtCore.pyqtSlot(Source)
+    def setSourceSelection(self, source: "Source") -> None:
         proxy = self.thumbnailView.model()
         model = proxy.sourceModel()
         # Register the source selection in the model and clear it.
-        model.setSourceSelection(selection)
+        model.setSourceSelection(source)
         model.clearImages()
         # Reset the time range filter to the default "full time" range.
         proxy.setTimeRangeFilter([TimeRange()])

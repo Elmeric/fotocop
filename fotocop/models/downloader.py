@@ -13,7 +13,7 @@ from fotocop.models.naming import (Case, TemplateType, NamingTemplates)
 from fotocop.models.imagesmover import ImageMover
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import Selection, ImageKey
+    from fotocop.models.sources import Source, ImageKey
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class Downloader(metaclass=Singleton):
         self.destinationNamingTemplate = namingTemplates.getDefault(TemplateType.DESTINATION)
 
         self._namingTemplates = namingTemplates
-        self._source: Optional["Selection"] = None
+        self._source: Optional["Source"] = None
         self._imageSample = None
 
         # Start the images' mover process and establish a Pipe connection with it
@@ -119,10 +119,10 @@ class Downloader(metaclass=Singleton):
         self._imagesMoverListener = ImageMoverListener(imageMoverConnection)
         self._imagesMoverListener.start()
 
-    def setSourceSelection(self, selection: "Selection"):
+    def setSourceSelection(self, source: "Source"):
         """Call on SourceManager.sourceSelected signal."""
-        self._source = selection
-        self._imageSample = selection.imageSample
+        self._source = source
+        self._imageSample = source.imageSample
         self._imageMoverConnection.send(
             (ImageMover.Command.CLEAR_IMAGES, 0)
         )

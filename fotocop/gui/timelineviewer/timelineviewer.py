@@ -4,7 +4,7 @@ from typing import Dict, TYPE_CHECKING, List
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
 
-from fotocop.models.sources import Selection, ImageProperty
+from fotocop.models.sources import Source, ImageProperty
 from . import tlv
 from .timelinescene import YearScene, MonthScene, DayScene
 from .timelineview import TimelineView
@@ -90,8 +90,8 @@ class TimelineViewer(QtWidgets.QWidget):
         # Set the timeline view to the scene corresponding to the default zoom level.
         self._setScene(tlv.DEFAULT_ZOOM_LEVEL)
 
-    @QtCore.pyqtSlot(Selection)
-    def setTimeline(self, sourceSelection: "Selection"):
+    @QtCore.pyqtSlot(Source)
+    def setTimeline(self, sourceSelection: "Source"):
         """Initiate the timeline model of the scene for each zoom level.
 
         The timeline is the one of the selected images' source (None if no source is

@@ -10,7 +10,7 @@ Each found source is saved into a dedicated dict:
 """
 import logging
 
-from typing import Optional, Tuple, List, Dict, Union, NamedTuple, Any, Iterator, Generator
+from typing import Optional, Tuple, List, Dict, NamedTuple, Any, Iterator
 from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from datetime import datetime
@@ -30,9 +30,9 @@ from fotocop.models.exifloader import ExifLoader
 from fotocop.models.sqlpersistence import DownloadedDB
 
 __all__ = [
-    "SourceType",
+    "MediaType",
     "DriveType",
-    "Selection",
+    "Source",
     "Image",
     "SourceManager",
     "Datation",
@@ -45,7 +45,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-Source = Optional[Union["Device", "LogicalDisk"]]
 ImageKey = str
 
 
@@ -58,7 +57,7 @@ def _makeDefaultImageSample() -> "Image":
     return imageSample
 
 
-class SourceType(Enum):
+class MediaType(Enum):
     DEVICE = auto()
     LOGICAL_DISK = auto()
     UNKNOWN = auto()
@@ -82,57 +81,45 @@ class ImageProperty(Enum):
 
 
 @dataclass()
-class LogicalDisk:
-    id: str
-    volumeName: str
-    providerName: str
-    description: str
-    kind: DriveType
+class Media:
+    name: str
+    driveLetter: str
+    path: Path
+    driveType: DriveType
 
     def __post_init__(self) -> None:
-        if self.kind == DriveType.NETWORK:
-            self.name: str = self.providerName.split("\\")[-1]
-            self.path: Path = Path("\\".join(self.providerName.split("\\")[:-1]))
-            self.caption: str = f"{self.name} ({self.path}) ({self.id})"
+        if self.driveType == DriveType.NETWORK:
+            self.caption: str = f"{self.name} ({self.path}) ({self.driveLetter})"
         else:
-            self.name: str = self.volumeName or self.description
-            self.path: Path = Path(f"{self.id}\\")
-            self.caption: str = f"{self.name} ({self.id})"
-
-        self.selectedPath: Optional[Path] = None
-        self.subDirs: bool = False
+            self.caption: str = f"{self.name} ({self.driveLetter})"
 
 
 @dataclass()
-class Device:
-    name: str
-    logicalDisk: LogicalDisk
-
-    def __post_init__(self) -> None:
-        self.caption = f"{self.name} ({self.logicalDisk.id})"
-
-        self.eject: bool = False
+class LogicalDisk(Media):
+    pass
 
 
-class Selection:
+@dataclass()
+class Device(Media):
+    pass
+
+
+class Source:
 
     THUMBNAIL_CACHE_SIZE = 10000
 
-    source: Source
-    kind: SourceType
+    media: Optional[Media]
+    eject: bool
+    selectedPath: Path
+    subDirs: bool
 
-    def __init__(
-        self,
-        source: Source = None,
-        kind: SourceType = SourceType.UNKNOWN,
-    ) -> None:
-        self.source = source
-        self.kind = kind
+    def __init__(self, media: Optional[Media] = None) -> None:
+        self.media = media
 
         self._images: Dict["ImageKey", "Image"] = dict()
         self.imageSample: "Image" = _makeDefaultImageSample()
         self.timeline: "Timeline" = Timeline()
-        self._thumbnailCache: "LRUCache" = LRUCache(Selection.THUMBNAIL_CACHE_SIZE)
+        self._thumbnailCache: "LRUCache" = LRUCache(Source.THUMBNAIL_CACHE_SIZE)
 
         self.selectedImagesCount: int = 0
 
@@ -141,17 +128,39 @@ class Selection:
 
         self.timelineBuilt: bool = False
 
+    @classmethod
+    def fromDevice(cls, device: Device, eject: bool = False):
+        s = cls(device)
+        s.eject = eject
+        return s
+
+    @classmethod
+    def fromLogicalDisk(cls, logicalDisk: LogicalDisk, path: Path, subDirs: bool = False):
+        s = cls(logicalDisk)
+        s.selectedPath = path
+        s.subDirs = subDirs
+        return s
+
+    @property
+    def isEmpty(self) -> bool:
+        return self.media is None
+
+    @property
+    def isDevice(self) -> bool:
+        return self.media is not None and isinstance(self.media, Device)
+
+    @property
+    def isLogicalDisk(self) -> bool:
+        return self.media is not None and isinstance(self.media, LogicalDisk)
+
     @property
     def path(self) -> str:
-        source = self.source
-        if source is None:
+        if self.isEmpty:
             return ""
-
-        kind = self.kind
-        if kind == SourceType.DEVICE:
-            return source.logicalDisk.path.as_posix()
-        elif kind == SourceType.LOGICAL_DISK:
-            return source.selectedPath.as_posix()
+        elif self.isDevice:
+            return self.media.path.as_posix()
+        elif self.isLogicalDisk:
+            return self.selectedPath.as_posix()
         else:
             return ""
 
@@ -276,7 +285,7 @@ class Selection:
         try:
             image = images[imageKey]
         except KeyError:
-            # selection has been reset or has changed: ignore old data
+            # source has been reset or has changed: ignore old data
             logger.debug(f"{imageKey} is not found in current source selection")
         else:
             sourceManager = SourceManager()
@@ -316,7 +325,7 @@ class Selection:
         try:
             image = self._images[imageKey]
         except KeyError:
-            # selection has been reset or has changed: ignore old data
+            # source has been reset or has changed: ignore old data
             logger.debug(f"{imageKey} is not found in current source selection")
         else:
             logger.debug(f"Received thumbnail for image {imageKey}")
@@ -325,15 +334,20 @@ class Selection:
             SourceManager().thumbnailLoaded.emit(imageKey)
 
     def markImagesAsSelected(self, imageKeys: List["ImageKey"], value: bool) -> None:
+        changed = list()
         for imageKey in imageKeys:
-            self._images[imageKey].isSelected = value
+            oldValue = self._images[imageKey].isSelected
+            if oldValue != value:
+                self._images[imageKey].isSelected = value
+                changed.append(imageKey)
 
         sel = 1 if value else -1
-        self.selectedImagesCount += sel * len(imageKeys)
+        self.selectedImagesCount += sel * len(changed)
 
-        SourceManager().imagesInfoChanged.emit(
-            imageKeys, ImageProperty.IS_SELECTED, value
-        )
+        if changed:
+            SourceManager().imagesInfoChanged.emit(
+                changed, ImageProperty.IS_SELECTED, value
+            )
 
     def getImagesRequiringSession(self) -> List["ImageKey"]:
         return [
@@ -444,11 +458,11 @@ class ImageScannerListener(ConnectionListener):
         if content == "images":
 
             if batch == "ScanComplete":
-                # All images received for current selection
+                # All images received for current source
                 SourceManager().scanComplete(*data)
             else:
-                # New images batch received for current selection
-                SourceManager().selection.receiveImages(batch, data)
+                # New images batch received for current source
+                SourceManager().source.receiveImages(batch, data)
 
         else:
             logger.warning(f"Received unknown content: {content}")
@@ -463,10 +477,10 @@ class ExifLoaderListener(ConnectionListener):
         sourceManager = SourceManager()
 
         if content == "datetime":
-            sourceManager.selection.receiveDatetime(imageKey, data)
+            sourceManager.source.receiveDatetime(imageKey, data)
 
         elif content == "thumbnail":
-            sourceManager.selection.receiveThumbnail(imageKey, data)
+            sourceManager.source.receiveThumbnail(imageKey, data)
 
         else:
             logger.warning(f"Received unknown content: {content}")
@@ -485,23 +499,23 @@ class ExifRequestor(StoppableThread):
 
     def requestExif(self):
         sourceManager = SourceManager()
-        selection = sourceManager.selection
-        imagesCount = selection.imagesCount
-        logger.info(f"Loading exif for {selection.path}...")
+        source = sourceManager.source
+        imagesCount = source.imagesCount
+        logger.info(f"Loading exif for {source.path}...")
         sourceManager.backgroundActionStarted.emit(
             f"Building timeline for {imagesCount} images...", imagesCount
         )
         requestedExifCount = 0
         stopped = False
-        for image in selection.images:
+        for image in source.images:
             if self.stopped():
-                logger.info(f"Stop requesting exif for {selection.path}")
+                logger.info(f"Stop requesting exif for {source.path}")
                 stopped = True
                 break
             if not image.isLoaded and not image.loadingInProgress:
                 image.loadingInProgress = True
                 requestedExifCount += 1
-                if requestedExifCount < Selection.THUMBNAIL_CACHE_SIZE:
+                if requestedExifCount < Source.THUMBNAIL_CACHE_SIZE:
                     # Load both datetime and thumbnail while the thumbnails cache is not full.
                     command = ExifLoader.Command.LOAD_ALL
                 else:
@@ -514,14 +528,14 @@ class ExifRequestor(StoppableThread):
                 )
         if not stopped:
             logger.info(
-                f"{requestedExifCount} exif load requests sent for {selection.path}"
+                f"{requestedExifCount} exif load requests sent for {source.path}"
             )
 
 
 class SourceManager(metaclass=Singleton):
 
     sourcesChanged = QtUtil.QtSignalAdapter()
-    sourceSelected = QtUtil.QtSignalAdapter(Selection)
+    sourceSelected = QtUtil.QtSignalAdapter(Source)
     imageScanCompleted = QtUtil.QtSignalAdapter(int)  # imagesCount
     imagesBatchLoaded = QtUtil.QtSignalAdapter(dict)  # images
     thumbnailLoaded = QtUtil.QtSignalAdapter(str)  # name
@@ -538,7 +552,7 @@ class SourceManager(metaclass=Singleton):
         self._devices = dict()
         self._logicalDisks = dict()
 
-        self.selection = Selection()
+        self.source = Source()
         self._scanInProgress = False
         self._buildTimelineInProgress = False
         self._exifRequestor = None
@@ -596,21 +610,30 @@ class SourceManager(metaclass=Singleton):
         c = wmi.WMI()
 
         # If call after first source manager initialization, abort any images scanning,
-        # exif loading, clear the selection and logicalDisks and devices dictionary.
+        # exif loading, clear the source and logicalDisks and devices dictionary.
         self._reset()
 
         for logicalDisk in c.Win32_LogicalDisk():
             # Capture only disk of the requested type, with an effective filesystem
             # (exclude DVD reader with no DVD inserted)
+            # logicalDisk.DeviceId:     F:
+            # logicalDisk.VolumeName:   Data
+            # logicalDisk.ProviderName: \\DiskStation\homes\Maison (for a network drive)
+            # logicalDisk.Description:  Disque fixe local
+            # logicalDisk.DriveType:    3
             if logicalDisk.DriveType in kind and logicalDisk.FileSystem:
-                drive = LogicalDisk(
-                    logicalDisk.DeviceId,  # F:
-                    logicalDisk.VolumeName,  # Data
-                    logicalDisk.ProviderName,  # \\DiskStation\homes\Maison (for a network drive)
-                    logicalDisk.Description,  # Disque fixe local
-                    logicalDisk.DriveType,  # 3
+                driveLetter = logicalDisk.DeviceId
+                driveType = logicalDisk.DriveType
+                if driveType == DriveType.NETWORK:
+                    providerName = logicalDisk.ProviderName
+                    name = providerName.split("\\")[-1]
+                    path = Path("\\".join(providerName.split("\\")[:-1]))
+                else:
+                    name = logicalDisk.VolumeName or logicalDisk.Description
+                    path = Path(f"{driveLetter}\\")
+                self._logicalDisks[driveLetter] = LogicalDisk(
+                    name, driveLetter, path, driveType
                 )
-                self._logicalDisks[logicalDisk.DeviceId] = drive
 
                 # Removable logical disks are also referred as Devices (e.g. USB disk or SD card)
                 if logicalDisk.DriveType == DriveType.REMOVABLE:
@@ -619,24 +642,24 @@ class SourceManager(metaclass=Singleton):
                         or logicalDisk.VolumeName
                         or logicalDisk.Description
                     )
-                    self._devices[name] = Device(name, drive)
+                    path = Path(f"{driveLetter}\\")
+                    self._devices[name] = Device(
+                        name, driveLetter, path, driveType
+                    )
 
         self.sourcesChanged.emit()
         self._autoSourceSelect()
 
-    def selectDevice(self, name: str, eject: bool = False):
-        selection = self.selection
-        source = selection.source
-        sourceKind = selection.kind
+    def selectDevice(self, name: Optional[str], eject: bool = False):
         if (
-            source is not None
-            and sourceKind == SourceType.DEVICE
-            and name == source.name
+            name is not None
+            and self.source.isDevice
+            and name == self.source.media.name
         ):
             # this device is already the selected one: nothing to do.
             return
 
-        # Abort any exif loading or images scanning before changing the selection
+        # Abort any exif loading or images scanning before changing the source
         self._abortExifLoading()
         self._abortScannning()
 
@@ -644,36 +667,33 @@ class SourceManager(metaclass=Singleton):
             device = self._devices[name]
 
         except KeyError:
-            # If the selected device is not found, change to an empty selection
+            # If the selected device is not found, change to an empty source
             self._resetSelection()
 
         else:
-            # Set the device as the selection with its eject status and start to scan
+            # Set the device as the source with its eject status and start to scan
             # images on the corresponding path (including subfolders)
-            self.selection = Selection(device, SourceType.DEVICE)
-            self.selection.source.eject = eject
-            path = self.selection.source.logicalDisk.path
+            self.source = Source.fromDevice(device, eject)
+            path = Path(self.source.path)
             self._scanImages(path, includeSubDirs=True)
 
         finally:
-            self._addToRecentSources(self.selection.source, self.selection.kind)
-            self.sourceSelected.emit(self.selection)
+            self._addToRecentSources()
+            self.sourceSelected.emit(self.source)
             self.imageSampleChanged.emit()
 
-    def selectLogicalDisk(self, driveId: str, path: Path, subDirs: bool = False):
-        selection = self.selection
-        source = selection.source
-        sourceKind = selection.kind
+    def selectLogicalDisk(self, driveId: Optional[str], path: Path, subDirs: bool = False):
+        source = self.source
         if (
-            source is not None
-            and sourceKind == SourceType.LOGICAL_DISK
+            driveId is not None
+            and self.source.isLogicalDisk
             and path == source.selectedPath
             and subDirs == source.subDirs
         ):
             # this drive/folder is already the selected one: nothing to do.
             return
 
-        # Abort any exif loading or images scanning before changing the selection
+        # Abort any exif loading or images scanning before changing the source
         self._abortExifLoading()
         self._abortScannning()
 
@@ -681,35 +701,31 @@ class SourceManager(metaclass=Singleton):
             drive = self._logicalDisks[driveId]
 
         except KeyError:
-            # If the selected device is not found, change to an empty selection
+            # If the selected device is not found, change to an empty source
             self._resetSelection()
 
         else:
-            # Set the drive as the selection with its subfolders status and path
+            # Set the drive as the source with its subfolders status and path
             # and start images scanning on that path (including subfolders)
-            self.selection = Selection(drive, SourceType.LOGICAL_DISK)
-            self.selection.source.selectedPath = path
-            self.selection.source.subDirs = subDirs
+            self.source = Source.fromLogicalDisk(drive, path, subDirs)
             self._scanImages(path, subDirs)
 
         finally:
-            self._addToRecentSources(self.selection.source, self.selection.kind)
-            self.sourceSelected.emit(self.selection)
+            self._addToRecentSources()
+            self.sourceSelected.emit(self.source)
             self.imageSampleChanged.emit()
 
     def setDriveSubDirsState(self, state: bool):
-        # If a drive is selected, re-select it but with the new subfolders state
-        selection = self.selection
-        source = selection.source
-        kind = selection.kind
-        if source and kind == SourceType.LOGICAL_DISK:
-            self.selectLogicalDisk(source.id, Path(selection.path), subDirs=state)
+        # If a logical disk is selected, re-select it but with the new subfolders state.
+        source = self.source
+        media = source.media
+        if source.isLogicalDisk:
+            self.selectLogicalDisk(media.driveLetter, Path(source.path), subDirs=state)
 
     def setDeviceEjectState(self, state: bool):
-        # If a device is selected, update its eject property to 'state'
-        source = self.selection.source
-        kind = self.selection.kind
-        if source and kind == SourceType.DEVICE:
+        # If a device is selected, update the eject property to 'state'.
+        source = self.source
+        if source.isDevice:
             source.eject = state
 
     def scanComplete(self, imagesCount: int, isStopped: bool):
@@ -720,12 +736,12 @@ class SourceManager(metaclass=Singleton):
             f"Status: {'stopped' if isStopped else 'complete'}"
         )
         if not isStopped:
-            # Store the images count of the selection and, if at least an images is
+            # Store the images count of the source and, if at least an images is
             # found, start to build the timeline by requesting exif data in a
             # dedicated thread
             self._scanInProgress = False
             self.backgroundActionCompleted.emit(f"Found {imagesCount} images")
-            self.selection.imagesCount = imagesCount
+            self.source.imagesCount = imagesCount
             self.imageScanCompleted.emit(imagesCount)
             if imagesCount > 0:
                 self._exifRequestor = ExifRequestor()
@@ -757,16 +773,16 @@ class SourceManager(metaclass=Singleton):
 
     def _autoSourceSelect(self) -> None:
         srcTypeStr, srcName, srcPath, srcSubDirs = Config.fotocopSettings.lastSource
-        srcType = SourceType[srcTypeStr]
+        srcType = MediaType[srcTypeStr]
         if len(self._devices) < 1:
             # No connected devices: re-select the last selected source if any.
-            if srcType == SourceType.DEVICE:
+            if srcType == MediaType.DEVICE:
                 self.selectDevice(srcName)
-            elif srcType == SourceType.LOGICAL_DISK:
+            elif srcType == MediaType.LOGICAL_DISK:
                 self.selectLogicalDisk(srcName, Path(srcPath), srcSubDirs)
             else:
                 self._resetSelection()
-                self.sourceSelected.emit(self.selection)
+                self.sourceSelected.emit(self.source)
 
         elif srcName in self._devices:
             # At least one device is connected and the devices' dict contains the last
@@ -820,22 +836,26 @@ class SourceManager(metaclass=Singleton):
         else:
             logger.info("Exif requestor no more running")
 
-    @staticmethod
-    def _addToRecentSources(source: Source, kind: SourceType):
-        if source:
-            if kind == SourceType.LOGICAL_DISK:
-                name = source.id
-                path = source.selectedPath
-                subDirs = source.subDirs
-            elif kind == SourceType.DEVICE:
-                name = source.name
-                path = subDirs = None
-            else:  # for robustness but cannot be reached
-                name = path = subDirs = None
-        else:
+    def _addToRecentSources(self) -> None:
+        source = self.source
+        media = source.media
+        if source.isEmpty:
+            kind = MediaType.UNKNOWN
+            name = path = subDirs = None
+        elif source.isLogicalDisk:
+            kind = MediaType.LOGICAL_DISK
+            name = media.driveLetter
+            path = source.selectedPath
+            subDirs = source.subDirs
+        elif source.isDevice:
+            kind = MediaType.DEVICE
+            name = media.name
+            path = subDirs = None
+        else:  # for robustness but cannot be reached
+            kind = MediaType.UNKNOWN
             name = path = subDirs = None
         Config.fotocopSettings.lastSource = (kind.name, name, path, subDirs)
 
     def _resetSelection(self) -> None:
-        self.selection = Selection()
+        self.source = Source()
         SourceManager().imagesInfoChanged.emit([], ImageProperty.IS_SELECTED, False)

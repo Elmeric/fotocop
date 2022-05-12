@@ -17,7 +17,7 @@ from fotocop.util import qtutil as QtUtil
 
 # Models
 from fotocop.models import settings as Config
-from fotocop.models.sources import SourceManager, SourceType, Selection, ImageProperty
+from fotocop.models.sources import SourceManager, Source, ImageProperty, Device, LogicalDisk
 from fotocop.models.downloader import Downloader
 from fotocop.models.naming import Case, TemplateType
 
@@ -381,23 +381,22 @@ class QtMainView(QtWidgets.QMainWindow):
         #         return self.saveProject()
         return True
 
-    @QtCore.pyqtSlot(Selection)
-    def displaySelectedSource(self, selection: "Selection") -> None:
+    @QtCore.pyqtSlot(Source)
+    def displaySelectedSource(self, source: "Source") -> None:
         """Update the sourceSelector widgets on source selection.
 
         Call when the source manager signals that a source is selected. The selected
         source may be a Device or a LogicalDisk object, or unknown (none).
 
         Args:
-            selection: the source manager selection
+            source: the selected source of the source manager.
         """
         resources = Config.fotocopSettings.resources
 
-        source = selection.source
-        kind = selection.kind
+        media = source.media
 
-        if kind == SourceType.DEVICE:
-            caption = source.caption
+        if source.isDevice:
+            caption = media.caption
             self.sourcePix.setPixmap(
                 QtGui.QPixmap(f"{resources}/device.png").scaledToHeight(
                     48, QtCore.Qt.SmoothTransformation
@@ -408,14 +407,14 @@ class QtMainView(QtWidgets.QMainWindow):
             self.sourceLbl.setToolTip(toolTip)
             self.sourceLbl.setStatusTip(toolTip)
 
-        elif kind == SourceType.LOGICAL_DISK:
-            icon = SourceSelector.DRIVE_ICON.get(source.kind, "drive.png")
+        elif source.isLogicalDisk:
+            icon = SourceSelector.DRIVE_ICON.get(media.driveType, "drive.png")
             self.sourcePix.setPixmap(
                 QtGui.QPixmap(f"{resources}/{icon}").scaledToHeight(
                     48, QtCore.Qt.SmoothTransformation
                 )
             )
-            caption = source.caption
+            caption = media.caption
             path = source.selectedPath
             posixPath = path.as_posix()
             sourcePath = posixPath[3:].replace("/", " / ")
@@ -428,7 +427,7 @@ class QtMainView(QtWidgets.QMainWindow):
             self.sourceLbl.setStatusTip(toolTip)
 
         else:
-            assert kind == SourceType.UNKNOWN
+            assert source.isEmpty
             self.sourcePix.setPixmap(
                 QtGui.QPixmap(f"{resources}/double-down.png").scaledToHeight(
                     48, QtCore.Qt.SmoothTransformation
@@ -495,7 +494,7 @@ class QtMainView(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def downloadButtonClicked(self) -> None:
         if self.downloadButton.sessionRequired:
-            sourceSelection = self._sourceManager.selection
+            sourceSelection = self._sourceManager.source
             imageKeys = sourceSelection.getImagesRequiringSession()
             if imageKeys:
                 dialog = SessionEditor(imagesCount=len(imageKeys), parent=self)
@@ -516,7 +515,7 @@ class QtMainView(QtWidgets.QMainWindow):
             pty: "ImageProperty",
             _value
     ) -> None:
-        source = self._sourceManager.selection
+        source = self._sourceManager.source
         timelineBuilt = source.timelineBuilt
         if pty is ImageProperty.IS_SELECTED or (pty is ImageProperty.DATETIME and timelineBuilt):
             count = source.selectedImagesCount

@@ -674,8 +674,7 @@ class SourceManager(metaclass=Singleton):
             # Set the device as the source with its eject status and start to scan
             # images on the corresponding path (including subfolders)
             self.source = Source.fromDevice(device, eject)
-            path = Path(self.source.path)
-            self._scanImages(path, includeSubDirs=True)
+            self._scanImages()
 
         finally:
             self._addToRecentSources()
@@ -708,7 +707,7 @@ class SourceManager(metaclass=Singleton):
             # Set the drive as the source with its subfolders status and path
             # and start images scanning on that path (including subfolders)
             self.source = Source.fromLogicalDisk(drive, path, subDirs)
-            self._scanImages(path, subDirs)
+            self._scanImages()
 
         finally:
             self._addToRecentSources()
@@ -802,7 +801,18 @@ class SourceManager(metaclass=Singleton):
         self._devices.clear()
         self._logicalDisks.clear()
 
-    def _scanImages(self, path: Path, includeSubDirs: bool = False):
+    def _scanImages(self) -> None:
+        source = self.source
+
+        if source.isDevice:
+            path = source.media.path
+            includeSubDirs = True
+        elif source.isLogicalDisk:
+            path = source.selectedPath
+            includeSubDirs = source.subDirs
+        else:
+            return
+
         self.backgroundActionStarted.emit(f"Scanning {path} for images...", 0)
         self.imageScannerConnection.send(
             (ImageScanner.Command.SCAN, (path.as_posix(), includeSubDirs))

@@ -15,18 +15,16 @@ from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from datetime import datetime
 from pathlib import Path
-from multiprocessing import Pipe
 
 import wmi
 
 from fotocop.util.cache import LRUCache
 from fotocop.util import qtutil as QtUtil
-from fotocop.util.threadutil import StoppableThread, ConnectionListener
+from fotocop.util.threadutil import StoppableThread
 from fotocop.util.basicpatterns import Singleton
 from fotocop.models import settings as Config
 from fotocop.models.timeline import Timeline
-from fotocop.models.imagescanner import ImageScanner
-from fotocop.models.exifloader import ExifLoader
+from fotocop.models.workerproxy import ImageScanner, ExifLoader
 from fotocop.models.sqlpersistence import DownloadedDB
 
 __all__ = [
@@ -218,9 +216,7 @@ class Source:
         if not image.loadingInProgress:
             logger.debug(f"Datetime cache missed for image: {name}")
             image.loadingInProgress = True  # noqa
-            SourceManager().exifLoaderConnection.send(
-                (ExifLoader.Command.LOAD_DATE, imageKey)
-            )
+            SourceManager().exifLoader.loadDatetime(imageKey)
         else:
             logger.debug(f"Loading in progress: {name}")
         return None
@@ -238,10 +234,9 @@ class Source:
                 image.loadingInProgress = True  # noqa
                 # Load date/time only if not yet loaded to avoid double count in the timeline
                 if image.datetime is None:
-                    command = ExifLoader.Command.LOAD_ALL
+                    SourceManager().exifLoader.loadAll(imageKey)
                 else:
-                    command = ExifLoader.Command.LOAD_THUMB
-                SourceManager().exifLoaderConnection.send((command, imageKey))
+                    SourceManager().exifLoader.loadThumbnail(imageKey)
             else:
                 logger.debug(f"Loading in progress: {name}")
             return b"loading", 0.0, 0
@@ -254,6 +249,7 @@ class Source:
     ):
         currentPath = self.path
         newImages = dict()
+        deselImageKeys = list()
         deselCount = 0
         for name, imageKey, downloadPath, downloadTime in images:
             if imageKey.startswith(currentPath):
@@ -261,6 +257,7 @@ class Source:
                 if downloadPath is not None:
                     image.isPreviouslyDownloaded = True
                     image.isSelected = False
+                    deselImageKeys.append(imageKey)
                     deselCount += 1
                 newImages[imageKey] = image
 
@@ -275,7 +272,7 @@ class Source:
             )
             SourceManager().imagesBatchLoaded.emit(newImages)
             SourceManager().imagesInfoChanged.emit(
-                list(newImages), ImageProperty.IS_SELECTED, True
+                deselImageKeys, ImageProperty.IS_SELECTED, False
             )
 
     def receiveDatetime(
@@ -447,45 +444,6 @@ class Image:
         return self.datetime is not None
 
 
-class ImageScannerListener(ConnectionListener):
-    def __init__(self, conn):
-        super().__init__(conn, name="ImageScannerListener")
-
-    def handleMessage(self, msg: Any) -> None:
-        header, data = msg
-        content, batch = header.split("#")
-
-        if content == "images":
-
-            if batch == "ScanComplete":
-                # All images received for current source
-                SourceManager().scanComplete(*data)
-            else:
-                # New images batch received for current source
-                SourceManager().source.receiveImages(batch, data)
-
-        else:
-            logger.warning(f"Received unknown content: {content}")
-
-
-class ExifLoaderListener(ConnectionListener):
-    def __init__(self, conn):
-        super().__init__(conn, name="ExifLoaderListener")
-
-    def handleMessage(self, msg: Any) -> None:
-        content, data, imageKey = msg
-        sourceManager = SourceManager()
-
-        if content == "datetime":
-            sourceManager.source.receiveDatetime(imageKey, data)
-
-        elif content == "thumbnail":
-            sourceManager.source.receiveThumbnail(imageKey, data)
-
-        else:
-            logger.warning(f"Received unknown content: {content}")
-
-
 class ExifRequestor(StoppableThread):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -517,11 +475,10 @@ class ExifRequestor(StoppableThread):
                 requestedExifCount += 1
                 if requestedExifCount < Source.THUMBNAIL_CACHE_SIZE:
                     # Load both datetime and thumbnail while the thumbnails cache is not full.
-                    command = ExifLoader.Command.LOAD_ALL
+                    sourceManager.exifLoader.loadAll(image.key)
                 else:
                     # Load only datetime once the thumbnails cache is full.
-                    command = ExifLoader.Command.LOAD_DATE
-                sourceManager.exifLoaderConnection.send((command, image.key))
+                    sourceManager.exifLoader.loadDatetime(image.key)
             else:
                 logger.debug(
                     f"Datetime yet loaded or in progress for {image.name}: skipped"
@@ -560,28 +517,14 @@ class SourceManager(metaclass=Singleton):
         self.downloadedDb = DownloadedDB()
 
         # Start the image scanner process and establish a Pipe connection with it
-        logger.info("Starting image scanner...")
-        imageScannerConnection, child_conn1 = Pipe()
-        self.imageScannerConnection = imageScannerConnection
-        self.imageScanner = ImageScanner(child_conn1, self.downloadedDb)
-        self.imageScanner.start()
-        child_conn1.close()
-
-        # Start a thread listening to the imageScanner process messages
-        self.imagesScannerListener = ImageScannerListener(imageScannerConnection)
-        self.imagesScannerListener.start()
+        self.imageScanner = ImageScanner(name="ImageScanner")
+        self.imageScanner.subscribe("ScanComplete", self.scanComplete)
+        self.imageScanner.subscribe("images", self.receiveImages)
 
         # Start the exif loader process and establish a Pipe connection with it
-        logger.info("Starting exif loader...")
-        exifLoaderConnection, child_conn2 = Pipe()
-        self.exifLoaderConnection = exifLoaderConnection
-        self.exifLoader = ExifLoader(child_conn2)
-        self.exifLoader.start()
-        child_conn2.close()
-
-        # Start a thread listening to the exifLoader process messages
-        self.exifLoaderListener = ExifLoaderListener(exifLoaderConnection)
-        self.exifLoaderListener.start()
+        self.exifLoader = ExifLoader(name="ExifLoader")
+        self.exifLoader.subscribe("datetime", self.receiveDatetime)
+        self.exifLoader.subscribe("thumbnail", self.receiveThumbnail)
 
     @property
     def devices(self) -> Iterator["Device"]:
@@ -727,6 +670,15 @@ class SourceManager(metaclass=Singleton):
         if source.isDevice:
             source.eject = state
 
+    def receiveImages(self, *args, **kwargs) -> None:
+        self.source.receiveImages(*args, **kwargs)
+
+    def receiveDatetime(self, *args, **kwargs) -> None:
+        self.source.receiveDatetime(*args, **kwargs)
+
+    def receiveThumbnail(self, *args, **kwargs) -> None:
+        self.source.receiveThumbnail(*args, **kwargs)
+
     def scanComplete(self, imagesCount: int, isStopped: bool):
         # Call by the images' scanner listener when the scan process is finished (either
         # complete or stopped)
@@ -754,21 +706,10 @@ class SourceManager(metaclass=Singleton):
         self._stopExifRequestor()
 
         # Stop and join the images' scanner process ant its listener thread
-        logger.info("Request images scanner to stop...")
-        self.imageScannerConnection.send((ImageScanner.Command.STOP, 0))
-        self.imageScanner.join(timeout=0.25)
-        if self.imageScanner.is_alive():
-            self.imageScanner.terminate()
-        self.imageScannerConnection.close()
-        self.imagesScannerListener.join()
+        self.imageScanner.stop()
 
         # Stop and join the exif loader process ant its listener thread
-        logger.info("Request exif loader to stop...")
-        self.exifLoaderConnection.send((ExifLoader.Command.STOP, 0))
-        # timeout is set to 5s to give time to the exiftool process to kindly terminate
-        self.exifLoader.join(timeout=5)
-        self.exifLoaderConnection.close()
-        self.exifLoaderListener.join()
+        self.exifLoader.stop()
 
     def _autoSourceSelect(self) -> None:
         srcTypeStr, srcName, srcPath, srcSubDirs = Config.fotocopSettings.lastSource
@@ -814,16 +755,14 @@ class SourceManager(metaclass=Singleton):
             return
 
         self.backgroundActionStarted.emit(f"Scanning {path} for images...", 0)
-        self.imageScannerConnection.send(
-            (ImageScanner.Command.SCAN, (path.as_posix(), includeSubDirs))
-        )
+        self.imageScanner.scan(path.as_posix(), includeSubDirs)
         self._scanInProgress = True
 
     def _abortScannning(self):
         if self._scanInProgress:
             # Scanning in progress: abort it
             self.backgroundActionCompleted.emit(f"Images scanning aborted!")
-            self.imageScannerConnection.send((ImageScanner.Command.ABORT, 0))
+            self.imageScanner.abort()
             self._scanInProgress = False
 
     def _abortExifLoading(self):

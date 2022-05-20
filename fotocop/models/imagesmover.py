@@ -1,26 +1,24 @@
 import logging
 import json
 from typing import TYPE_CHECKING, Tuple, Optional, List, Dict
-from multiprocessing import Process, Event
 from enum import Enum, auto
 from datetime import datetime, date
 from dataclasses import dataclass
 
-from fotocop.util.logutil import LogConfig, configureRootLogger
 from fotocop.util.threadutil import StoppableThread
+from fotocop.util.workerutil import BackgroundWorker, Message
 from fotocop.util.pathutil import Path
 from fotocop.models import settings as Config
 from fotocop.models.naming import TemplateType, NamingTemplate
-from fotocop.models.sources import ImageProperty
 
 if TYPE_CHECKING:
-    from fotocop.models.sources import ImageKey, Image
+    from fotocop.models.sources import ImageKey, Image, ImageProperty
 
 logger = logging.getLogger(__name__)
 
 
 def _publishData(conn, content: str, *data) -> None:
-    msg = (content, *data)
+    msg = Message(content, data)
     try:
         conn.send(msg)
         logger.debug(f"Data published: {msg}")
@@ -263,11 +261,11 @@ class DownloadHandler(StoppableThread):
         return name
 
 
-class ImageMover(Process):
+class ImageMover(BackgroundWorker):
     ATTR_MAP = {
-        ImageProperty.DATETIME: "datetime",
-        ImageProperty.IS_SELECTED: "isSelected",
-        ImageProperty.SESSION: "session",
+        "DATETIME": "datetime",
+        "IS_SELECTED": "isSelected",
+        "SESSION": "session",
     }
 
     class Command(Enum):
@@ -289,16 +287,7 @@ class ImageMover(Process):
         Create a ImageMover process instance and save the connection 'conn' to
         the main process.
         """
-        super().__init__()
-
-        self.name = "ImagesMover"
-
-        logConfig = LogConfig()
-        self._logQueue = logConfig.logQueue
-        self._logLevel = logConfig.logLevel
-
-        self._conn = conn
-        self._exitProcess = Event()
+        super().__init__(conn, "ImagesMover")
 
         self._sequences = Sequences()
 
@@ -309,30 +298,14 @@ class ImageMover(Process):
 
         self._downloadHandler = None
 
-    def run(self):
-        """ImagesMover 'main loop'
-        """
-        configureRootLogger(self._logQueue, self._logLevel)
-
-        self._exitProcess.clear()
-
-        logger.info("Images mover started")
-        while True:
-            self.handleCommand()
-            if self._exitProcess.wait(timeout=0.01):
-                break
-
-        self._conn.close()
-        logger.info("Images mover stopped")
-
-    def handleCommand(self):
+    def _handleCommand(self):
         """Poll the ImageMover connection for task message.
 
         A task message is a tuple (action, arg).
         """
         # Check for command on the process connection
         if self._conn.poll():
-            action, *args = self._conn.recv()
+            action, args = self._conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping images mover...")
@@ -406,7 +379,7 @@ class ImageMover(Process):
             value
     ) -> None:
         try:
-            attr = ImageMover.ATTR_MAP[pty]
+            attr = ImageMover.ATTR_MAP[pty.name]
         except KeyError:
             logger.warning(f"Cannot update images info: {pty.name} is unknown")
 

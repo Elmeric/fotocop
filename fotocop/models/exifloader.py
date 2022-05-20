@@ -1,18 +1,17 @@
 import logging
 import base64
 from typing import TYPE_CHECKING, Tuple
-from multiprocessing import Process, Event
 from enum import Enum, auto
 
 from fotocop.util import exiftool
-from fotocop.util.logutil import LogConfig, configureRootLogger
+from fotocop.util.workerutil import BackgroundWorker, Message
 
 if TYPE_CHECKING:
     from fotocop.models.sources import ImageKey
 logger = logging.getLogger(__name__)
 
 
-class ExifLoader(Process):
+class ExifLoader(BackgroundWorker):
 
     class Command(Enum):
         STOP = auto()
@@ -25,62 +24,44 @@ class ExifLoader(Process):
         Create a ExifLoader process instance and save the connection 'conn' to
         the main process.
         """
-        super().__init__()
+        super().__init__(conn, "ExifLoader")
 
-        self.name = "ExifLoader"
-
-        logConfig = LogConfig()
-        self.logQueue = logConfig.logQueue
-        self.logLevel = logConfig.logLevel
-
-        self.conn = conn
-        self.exitProcess = Event()
         self.exifTool = None
 
-    def run(self):
-        """ExifLoader 'main loop'
-        """
-        configureRootLogger(self.logQueue, self.logLevel)
-
+    def _preRun(self) -> None:
         # Start the exiftool process
         logger.info("Starting ExifTool...")
         self.exifTool = exiftool.ExifTool()
         self.exifTool.start()
 
-        self.exitProcess.clear()
-
-        logger.info("Exif loader started")
-        while True:
-            self.handleCommand()
-            if self.exitProcess.wait(timeout=0.01):
-                break
-
-        self.conn.close()
+    def _postRun(self) -> None:
         logger.info("Stopping ExifTool...")
         self.exifTool.terminate()
-        logger.info("Exif loader stopped")
 
-    def handleCommand(self):
+    def _handleCommand(self):
         """Poll the ExifLoader connection for task message.
 
         A task message is a tuple (action, arg)
         """
         # Check for command on the process connection
-        if self.conn.poll():
-            action, imageKey = self.conn.recv()
+        if self._conn.poll():
+            action, args = self._conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping exif loader...")
-                self.exitProcess.set()
+                self._exitProcess.set()
             elif action == self.Command.LOAD_ALL:
                 # Load date/time and thumbnail
+                imageKey, = args
                 logger.debug(f"Loading date and thumbnail from exif for {imageKey}...")
                 self.loadExif(imageKey)
             elif action == self.Command.LOAD_THUMB:
                 # Load thumbnail
+                imageKey, = args
                 logger.debug(f"Loading thumbnail from exif for {imageKey}...")
                 self.loadThumbnail(imageKey)
             elif action == self.Command.LOAD_DATE:
+                imageKey, = args
                 # Load date/time
                 logger.debug(f"Loading date time from exif for {imageKey}...")
                 self.loadDatetime(imageKey)
@@ -225,17 +206,17 @@ class ExifLoader(Process):
             datetime: Tuple[str, str, str, str, str, str],
             imageKey: "ImageKey"
     ):
-        data = (f"datetime", datetime, imageKey)
+        data = Message("datetime", (imageKey, datetime))
         try:
-            self.conn.send(data)
+            self._conn.send(data)
             logger.debug(f"Date time sent for image: {imageKey}")
         except (OSError, EOFError, BrokenPipeError):
             pass
 
     def publishThumbnail(self, thumbnail: tuple, imageKey: "ImageKey"):
-        data = (f"thumbnail", thumbnail, imageKey)
+        data = Message("thumbnail", (imageKey, thumbnail))
         try:
-            self.conn.send(data)
+            self._conn.send(data)
             logger.debug(f"Thumbnail sent for image: {imageKey}")
         except (OSError, EOFError, BrokenPipeError):
             pass

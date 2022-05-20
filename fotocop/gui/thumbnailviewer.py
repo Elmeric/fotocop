@@ -79,9 +79,11 @@ class ImageModel(QtCore.QAbstractListModel):
             )
 
         if role == ImageModel.UserRoles.PreviouslyDownloadedRole:
-            return self._sourceSelection.getImageProperty(
+            downloadInfo = self._sourceSelection.getImageProperty(
                 imageKey, ImageProperty.DOWNLOAD_INFO
-            ).isPreviouslyDownloaded
+            )
+            if downloadInfo is not None:
+                return downloadInfo.isPreviouslyDownloaded
 
         if role == QtCore.Qt.ToolTipRole:
             sourceSelection = self._sourceSelection

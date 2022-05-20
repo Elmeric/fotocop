@@ -1,11 +1,10 @@
 import logging
 from typing import Tuple, List, Optional
 from pathlib import Path
-from multiprocessing import Process, Event
 from enum import Enum, auto
 
-from fotocop.util.logutil import LogConfig, configureRootLogger
 from fotocop.util.threadutil import StoppableThread
+from fotocop.util.workerutil import BackgroundWorker, Message
 from fotocop.models.sqlpersistence import DownloadedDB, FileDownloaded
 
 logger = logging.getLogger(__name__)
@@ -81,7 +80,7 @@ class ScanHandler(StoppableThread):
         return self._downloadedDb.fileIsPreviouslyDownloaded(name, size, mtime)
 
     def _publishImagesBatch(self, batch: int, images: List[Tuple[str, str, str, float]]):
-        data = (f"images#{batch}", images)
+        data = Message("images", (batch, images))
         try:
             self._conn.send(data)
             logger.debug(f"Images sent: batch#{batch}")
@@ -89,7 +88,7 @@ class ScanHandler(StoppableThread):
             pass
 
     def _publishScanComplete(self, imagesCount: int, stopped: bool):
-        data = (f"images#ScanComplete", (imagesCount, stopped))
+        data = Message("ScanComplete", (imagesCount, stopped))
         try:
             self._conn.send(data)
             logger.info(f"{imagesCount} images found ({'stopped' if stopped else ''})")
@@ -97,7 +96,7 @@ class ScanHandler(StoppableThread):
             pass
 
 
-class ImageScanner(Process):
+class ImageScanner(BackgroundWorker):
 
     BATCH_SIZE = 500
 
@@ -106,42 +105,16 @@ class ImageScanner(Process):
         SCAN = auto()   # Start scanning images
         ABORT = auto()  # Abort current scanning
 
-    def __init__(self, conn, db: DownloadedDB) -> None:
+    def __init__(self, conn) -> None:
         """
         Create a ImageScanner process instance and save the connection 'conn' to
         the main process.
         """
-        super().__init__()
-
-        self.name = "ImageScanner"
-
-        logConfig = LogConfig()
-        self._logQueue = logConfig.logQueue
-        self._logLevel = logConfig.logLevel
-
-        self._conn = conn
-        self._exitProcess = Event()
+        super().__init__(conn, "ImageScanner")
 
         self._scanHandler = None
 
-        self._downloadedDb = db
-
-    def run(self):
-        """ImageScanner 'main loop'
-        """
-
-        configureRootLogger(self._logQueue, self._logLevel)
-
-        self._exitProcess.clear()
-
-        logger.info("Image scanner started")
-        while True:
-            self._handleCommand()
-            if self._exitProcess.wait(timeout=0.01):
-                break
-
-        self._conn.close()
-        logger.info("Image scanner stopped")
+        self._downloadedDb = DownloadedDB()
 
     def _handleCommand(self):
         """Poll the ImageScanner connection for task message.

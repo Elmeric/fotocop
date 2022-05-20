@@ -1,75 +1,19 @@
 import logging
-from typing import TYPE_CHECKING, Tuple, Optional, List, Dict, Any
+from typing import TYPE_CHECKING, Tuple, Optional, List, Dict, Iterable
 from datetime import datetime
 from pathlib import Path
-from multiprocessing import Pipe
 
 from fotocop.util import qtutil as QtUtil
 from fotocop.util.basicpatterns import Singleton, DelegatedAttribute
-from fotocop.util.threadutil import ConnectionListener
 from fotocop.models import settings as Config
 from fotocop.models.sources import Image, ImageProperty
 from fotocop.models.naming import (Case, TemplateType, NamingTemplates)
-from fotocop.models.imagesmover import ImageMover
+from fotocop.models.workerproxy import ImageMover
 
 if TYPE_CHECKING:
     from fotocop.models.sources import Source, ImageKey
 
 logger = logging.getLogger(__name__)
-
-
-class ImageMoverListener(ConnectionListener):
-    def __init__(self, conn):
-        super().__init__(conn, name="ImageMoverListener")
-
-    def handleMessage(self, msg: Any) -> None:
-        content, *data = msg
-        downloader = Downloader()
-
-        if content == "image_preview":
-            sampleName, samplePath = data
-            logger.debug(
-                f"Received image sample preview: {sampleName}, {samplePath}"
-            )
-            downloader.imageSampleChanged.emit(
-                sampleName,
-                Path(samplePath).as_posix()
-            )
-
-        elif content == "folder_preview":
-            previewFolders, *_ = data
-            logger.debug(
-                f"Received folder preview: {previewFolders}"
-            )
-            downloader.folderPreviewChanged.emit(previewFolders)
-
-        elif content == "selected_images_count":
-            selectedImagesCount, *_ = data
-            logger.debug(
-                f"{selectedImagesCount} images to download"
-            )
-            downloader.backgroundActionStarted.emit(
-                f"Downloading {selectedImagesCount} images...", selectedImagesCount
-            )
-
-        elif content == "downloaded_images_count":
-            downloadedImagesCount, *_ = data
-            downloader.backgroundActionProgressChanged.emit(
-                downloadedImagesCount
-            )
-
-        elif content == "download_completed":
-            downloadedImagesCount, downloadedImagesInfo = data
-            downloader.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
-            downloader.backgroundActionCompleted.emit(downloadedImagesCount)
-
-        elif content == "download_cancelled":
-            downloadedImagesCount, downloadedImagesInfo = data
-            downloader.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
-            downloader.backgroundActionCompleted.emit(downloadedImagesCount)
-
-        else:
-            logger.warning(f"Received unknown content: {content}")
 
 
 class Downloader(metaclass=Singleton):
@@ -108,31 +52,24 @@ class Downloader(metaclass=Singleton):
         self._imageSample = None
 
         # Start the images' mover process and establish a Pipe connection with it
-        logger.info("Starting images mover...")
-        imageMoverConnection, child_conn1 = Pipe()
-        self._imageMoverConnection = imageMoverConnection
-        self._imageMover = ImageMover(child_conn1)
-        self._imageMover.start()
-        child_conn1.close()
-
-        # Start a thread listening to the imageMover process messages
-        self._imagesMoverListener = ImageMoverListener(imageMoverConnection)
-        self._imagesMoverListener.start()
+        self._imageMover = ImageMover(name="ImageMover")
+        self._imageMover.subscribe("image_preview", self.receiveImageSamplePreview)
+        self._imageMover.subscribe("folder_preview", self.receiveFolderPreview)
+        self._imageMover.subscribe("selected_images_count", self.downloadStarted)
+        self._imageMover.subscribe("downloaded_images_count", self.downloadStatus)
+        self._imageMover.subscribe("download_completed", self.downloadComplete)
+        self._imageMover.subscribe("download_cancelled", self.downloadCancelled)
 
     def setSourceSelection(self, source: "Source"):
         """Call on SourceManager.sourceSelected signal."""
         self._source = source
         self._imageSample = source.imageSample
-        self._imageMoverConnection.send(
-            (ImageMover.Command.CLEAR_IMAGES, 0)
-        )
-        self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
-        self._imageMoverConnection.send(
-            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
-        )
+        self._imageMover.clearImages()
+        self._imageMover.getFoldersPreview()
+        self._imageMover.getImageSamplePreview(self._imageSample)
 
     def addImages(self, images: Dict["ImageKey", "Image"]) -> None:
-        self._imageMoverConnection.send((ImageMover.Command.ADD_IMAGES, images))
+        self._imageMover.addImages(images)
 
     def updateImagesInfo(
             self,
@@ -141,55 +78,45 @@ class Downloader(metaclass=Singleton):
             value
     ) -> None:
         """Call on SourceManager.imagesInfoChanged signal."""
-        self._imageMoverConnection.send(
-            (ImageMover.Command.UPDATE_IMAGES_INFO, imageKeys, pty, value)
-        )
+        self._imageMover.updateImagesInfo(imageKeys, pty, value)
         if pty is ImageProperty.SESSION:
-            self._imageMoverConnection.send(
-                (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
-            )
+            self._imageMover.getImageSamplePreview(self._imageSample)
         if self._source is not None and self._source.timelineBuilt:
-            self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
+            self._imageMover.getFoldersPreview()
 
     def updateImageSample(self):
         """Call on SourceManager.imageSampleChanged signal."""
         self._imageSample = self._source.imageSample
-        self._imageMoverConnection.send(
-            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
-        )
+        self._imageMover.getImageSamplePreview(self._imageSample)
 
     def selectDestination(self, destination: Path) -> None:
         self.destination = destination
         Config.fotocopSettings.lastDestination = destination
-        self._imageMoverConnection.send((ImageMover.Command.SET_DEST, destination.as_posix()))
+        self._imageMover.setDestination(destination.as_posix())
         self.destinationSelected.emit(destination)
 
     def setNamingTemplate(self, kind: "TemplateType", key: str):
         if kind == TemplateType.IMAGE:
             self._setImageNamingTemplate(key)
-            self._imageMoverConnection.send(
-                (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
-            )
+            self._imageMover.getImageSamplePreview(self._imageSample)
         else:
             assert kind == TemplateType.DESTINATION
             self._setDestinationNamingTemplate(key)
-            self._imageMoverConnection.send((ImageMover.Command.GET_FOLDERS_PREVIEW, 0))
+            self._imageMover.getFoldersPreview()
 
     def setExtension(self, extensionKind: Case):
         template = self.imageNamingTemplate
         template.extension = extensionKind
         Config.fotocopSettings.lastNamingExtension = extensionKind.name
-        self._imageMoverConnection.send((ImageMover.Command.SET_IMG_TPL, template))
+        self._imageMover.setImageTemplate(template)
         self.imageNamingExtensionSelected.emit(extensionKind)
-        self._imageMoverConnection.send(
-            (ImageMover.Command.GET_IMG_PREVIEW, self._imageSample)
-        )
+        self._imageMover.getImageSamplePreview(self._imageSample)
 
     def download(self) -> None:
-        self._imageMoverConnection.send((ImageMover.Command.DOWNLOAD, 0))
+        self._imageMover.startDownload()
 
     def cancelDownload(self) -> None:
-        self._imageMoverConnection.send((ImageMover.Command.CANCEL, 0))
+        self._imageMover.cancelDownload()
 
     def markImagesAsPreviouslyDownloaded(
             self,
@@ -198,19 +125,37 @@ class Downloader(metaclass=Singleton):
         self._source.markImagesAsPreviouslyDownloaded(downloadedImagesInfo)
 
     def saveSequences(self):
-        self._imageMoverConnection.send((ImageMover.Command.SAVE_SEQ, 0))
+        self._imageMover.saveSequences()
+
+    def receiveImageSamplePreview(self, name: str, path: str) -> None:
+        logger.debug(f"Received image sample preview: {name}, {path}")
+        self.imageSampleChanged.emit(name, Path(path).as_posix())
+
+    def receiveFolderPreview(self, folders: Iterable[str]) -> None:
+        logger.debug(f"Received folder preview: {folders}")
+        self.folderPreviewChanged.emit(folders)
+
+    def downloadStarted(self, count: int) -> None:
+        logger.debug(f"{count} images to download")
+        self.backgroundActionStarted.emit(f"Downloading {count} images...", count)
+
+    def downloadStatus(self, count: int) -> None:
+        self.backgroundActionProgressChanged.emit(count)
+
+    def downloadComplete(self, msg: str, imagesInfo: List[Tuple[str, datetime, Path]]) -> None:
+        self.markImagesAsPreviouslyDownloaded(imagesInfo)
+        self.backgroundActionCompleted.emit(msg)
+
+    def downloadCancelled(self, msg: str, imagesInfo: List[Tuple[str, datetime, Path]]) -> None:
+        self.markImagesAsPreviouslyDownloaded(imagesInfo)
+        self.backgroundActionCompleted.emit(msg)
 
     def close(self) -> None:
         # Organize a kindly shutdown when quitting the application
 
         # Stop and join the images' mover process ant its listener thread
         logger.info("Request images mover to stop...")
-        self._imageMoverConnection.send((ImageMover.Command.STOP, 0))
-        self._imageMover.join(timeout=0.25)
-        if self._imageMover.is_alive():
-            self._imageMover.terminate()
-        self._imageMoverConnection.close()
-        self._imagesMoverListener.join()
+        self._imageMover.stop()
 
     def _setImageNamingTemplate(self, key: str):
         template = self.getNamingTemplateByKey(TemplateType.IMAGE, key)
@@ -218,7 +163,7 @@ class Downloader(metaclass=Singleton):
         template.extension = self.imageNamingTemplate.extension
         self.imageNamingTemplate = template
         Config.fotocopSettings.lastImageNamingTemplate = key
-        self._imageMoverConnection.send((ImageMover.Command.SET_IMG_TPL, template))
+        self._imageMover.setImageTemplate(template)
         self.imageNamingTemplateSelected.emit(key)
         self._checkRequiredInfos()
 
@@ -226,7 +171,7 @@ class Downloader(metaclass=Singleton):
         template = self.getNamingTemplateByKey(TemplateType.DESTINATION, key)
         self.destinationNamingTemplate = template
         Config.fotocopSettings.lastDestinationNamingTemplate = key
-        self._imageMoverConnection.send((ImageMover.Command.SET_DEST_TPL, template))
+        self._imageMover.setDestinationTemplate(template)
         self.destinationNamingTemplateSelected.emit(key)
         self._checkRequiredInfos()
 

@@ -56,4 +56,4 @@ class BackgroundWorker(mp.Process):
         pass
 
     def _handleCommand(self, *args, **kwargs) -> None:
-        pass
+        raise NotImplementedError(f"{self.name} Worker instance shall implement a command handler")

@@ -1,7 +1,7 @@
 import logging
 import threading
 import multiprocessing as mp
-from typing import TYPE_CHECKING, Dict, List, Callable
+from typing import TYPE_CHECKING, Dict, List, Callable, Tuple
 
 if TYPE_CHECKING:
     from enum import Enum
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class Task:
     def __init__(self, command: "Enum", *args) -> None:
         self._command = command
-        self._params = args
+        self._params: Tuple = args
 
     def execute(self, receiver: "Connection") -> None:
         receiver.send((self._command, self._params))

@@ -301,11 +301,13 @@ class ImageMover(BackgroundWorker):
     def _handleCommand(self):
         """Poll the ImageMover connection for task message.
 
-        A task message is a tuple (action, arg).
+        A task message is a tuple (action, args) where args is itself a tuple of params
+        (empty tuple if the command has no params)
         """
         # Check for command on the process connection
-        if self._conn.poll():
-            action, args = self._conn.recv()
+        conn = self._conn
+        if conn.poll():
+            action, args = conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping images mover...")
@@ -357,7 +359,7 @@ class ImageMover(BackgroundWorker):
                 logger.debug(f"Save the Sequences state to persistent file...")
                 self._sequences.save()
             else:
-                logger.warning(f"Unknown command {action.name} ignored")
+                logger.warning(f"Unknown command {action} ignored")
 
     def _setDestination(self, path: str) -> None:
         self._destination = Path(path)

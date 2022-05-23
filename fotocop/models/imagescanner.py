@@ -119,12 +119,13 @@ class ImageScanner(BackgroundWorker):
     def _handleCommand(self):
         """Poll the ImageScanner connection for task message.
 
-        A task message is a tuple (action, arg)
+        A task message is a tuple (action, args) where action is a local Command enum
+        and args is itself a tuple of params (empty tuple if the command has no params).
         """
         # Check for command on the process connection
         conn = self._conn
         if conn.poll():
-            action, arg = conn.recv()
+            action, args = conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping image scanner...")
@@ -135,12 +136,12 @@ class ImageScanner(BackgroundWorker):
                 self._stopScanning()
             elif action == self.Command.SCAN:
                 # Scan images
-                path, subDirs = arg
+                path, subDirs = args
                 logger.debug(f"Start a new scan handler")
                 self._scanHandler = ScanHandler(path, subDirs, conn, self._downloadedDb)
                 self._scanHandler.start()
             else:
-                logger.warning(f"Unknown command {action.name} ignored")
+                logger.warning(f"Unknown command {action} ignored")
 
     def _stopScanning(self):
         scanHandler = self._scanHandler

@@ -37,7 +37,7 @@ class WorkerProxy:
     def stop(self) -> None:
         # Stop and join the background process ant its listener thread
         logger.info(f"Request {self.name} to stop...")
-        Task(self._worker.Command.STOP, 0).execute(self._workerConnection)
+        Task(self._worker.Command.STOP).execute(self._workerConnection)
         self._worker.join(timeout=0.25)
         if self._worker.is_alive():
             self._worker.terminate()
@@ -50,7 +50,7 @@ class ImageScanner(WorkerProxy):
         Task(scanner.ImageScanner.Command.SCAN, path, includeSubDirs).execute(self._workerConnection)
 
     def abort(self) -> None:
-        Task(scanner.ImageScanner.Command.ABORT, 0).execute(self._workerConnection)
+        Task(scanner.ImageScanner.Command.ABORT).execute(self._workerConnection)
 
 
 class ExifLoader(WorkerProxy):
@@ -66,10 +66,10 @@ class ExifLoader(WorkerProxy):
 
 class ImageMover(WorkerProxy):
     def clearImages(self) -> None:
-        Task(mover.ImageMover.Command.CLEAR_IMAGES, 0).execute(self._workerConnection)
+        Task(mover.ImageMover.Command.CLEAR_IMAGES).execute(self._workerConnection)
 
     def getFoldersPreview(self) -> None:
-        Task(mover.ImageMover.Command.GET_FOLDERS_PREVIEW, 0).execute(self._workerConnection)
+        Task(mover.ImageMover.Command.GET_FOLDERS_PREVIEW).execute(self._workerConnection)
 
     def getImageSamplePreview(self, image) -> None:
         Task(mover.ImageMover.Command.GET_IMG_PREVIEW, image).execute(self._workerConnection)
@@ -90,10 +90,10 @@ class ImageMover(WorkerProxy):
         Task(mover.ImageMover.Command.SET_DEST_TPL, template).execute(self._workerConnection)
 
     def startDownload(self) -> None:
-        Task(mover.ImageMover.Command.DOWNLOAD, 0).execute(self._workerConnection)
+        Task(mover.ImageMover.Command.DOWNLOAD).execute(self._workerConnection)
 
     def cancelDownload(self) -> None:
-        Task(mover.ImageMover.Command.CANCEL, 0).execute(self._workerConnection)
+        Task(mover.ImageMover.Command.CANCEL).execute(self._workerConnection)
 
     def saveSequences(self) -> None:
-        Task(mover.ImageMover.Command.SAVE_SEQ, 0).execute(self._workerConnection)
+        Task(mover.ImageMover.Command.SAVE_SEQ).execute(self._workerConnection)

@@ -41,11 +41,13 @@ class ExifLoader(BackgroundWorker):
     def _handleCommand(self):
         """Poll the ExifLoader connection for task message.
 
-        A task message is a tuple (action, arg)
+        A task message is a tuple (action, args) where args is itself a tuple of params
+        (empty tuple if the command has no params)
         """
         # Check for command on the process connection
-        if self._conn.poll():
-            action, args = self._conn.recv()
+        conn = self._conn
+        if conn.poll():
+            action, args = conn.recv()
             if action == self.Command.STOP:
                 # Stop the 'main' loop
                 logger.info("Stopping exif loader...")
@@ -66,7 +68,7 @@ class ExifLoader(BackgroundWorker):
                 logger.debug(f"Loading date time from exif for {imageKey}...")
                 self.loadDatetime(imageKey)
             else:
-                logger.warning(f"Unknown command {action.name} ignored")
+                logger.warning(f"Unknown command {action} ignored")
 
     def loadExif(self, imageKey: "ImageKey"):
         exif = self.exifTool.get_tags(

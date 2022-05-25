@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BackgroundWorker"]
+__all__ = ["Message", "BackgroundWorker"]
 
 
 @dataclass

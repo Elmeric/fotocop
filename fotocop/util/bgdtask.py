@@ -22,10 +22,8 @@ class Task:
 
 class Notifier:
     _subscribers: Dict[str, List[Callable]]
-    _conn: "Connection"
 
     def __init__(self, conn: "Connection", name: str) -> None:
-        self._conn = conn
         self._alive = mp.Event()
         self._lock = threading.Lock()
         self._subscribers = dict()
@@ -53,9 +51,8 @@ class Notifier:
         self._alive.set()
         while self._alive.is_set():
             try:
-                if self._conn.poll(timeout=0.01):
-                    msg = self._conn.recv()
-                    # msg: Message = self._conn.recv()
+                if conn.poll(timeout=0.01):
+                    msg: "Message" = conn.recv()
                     with self._lock:
                         self._notify(msg)
 

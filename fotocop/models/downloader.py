@@ -154,7 +154,6 @@ class Downloader(metaclass=Singleton):
         # Organize a kindly shutdown when quitting the application
 
         # Stop and join the images' mover process ant its listener thread
-        logger.info("Request images mover to stop...")
         self._imageMover.stop()
 
     def _setImageNamingTemplate(self, key: str):

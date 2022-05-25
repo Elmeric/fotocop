@@ -1,10 +1,10 @@
 import logging
 import base64
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 from enum import Enum, auto
 
 from fotocop.util import exiftool
-from fotocop.util.workerutil import BackgroundWorker, Message
+from fotocop.util.workerutil import BackgroundWorker
 
 if TYPE_CHECKING:
     from fotocop.models.sources import ImageKey
@@ -26,6 +26,11 @@ class ExifLoader(BackgroundWorker):
         """
         super().__init__(conn, "ExifLoader")
 
+        self.registerAction(self.Command.LOAD_THUMB, self._loadThumbnail)
+        self.registerAction(self.Command.LOAD_DATE, self._loadDatetime)
+        self.registerAction(self.Command.LOAD_ALL, self._loadExif)
+        self.registerAction(self.Command.STOP, self._stop)
+
         self.exifTool = None
 
     def _preRun(self) -> None:
@@ -38,39 +43,8 @@ class ExifLoader(BackgroundWorker):
         logger.info("Stopping ExifTool...")
         self.exifTool.terminate()
 
-    def _handleCommand(self):
-        """Poll the ExifLoader connection for task message.
-
-        A task message is a tuple (action, args) where args is itself a tuple of params
-        (empty tuple if the command has no params)
-        """
-        # Check for command on the process connection
-        conn = self._conn
-        if conn.poll():
-            action, args = conn.recv()
-            if action == self.Command.STOP:
-                # Stop the 'main' loop
-                logger.info("Stopping exif loader...")
-                self._exitProcess.set()
-            elif action == self.Command.LOAD_ALL:
-                # Load date/time and thumbnail
-                imageKey, = args
-                logger.debug(f"Loading date and thumbnail from exif for {imageKey}...")
-                self.loadExif(imageKey)
-            elif action == self.Command.LOAD_THUMB:
-                # Load thumbnail
-                imageKey, = args
-                logger.debug(f"Loading thumbnail from exif for {imageKey}...")
-                self.loadThumbnail(imageKey)
-            elif action == self.Command.LOAD_DATE:
-                imageKey, = args
-                # Load date/time
-                logger.debug(f"Loading date time from exif for {imageKey}...")
-                self.loadDatetime(imageKey)
-            else:
-                logger.warning(f"Unknown command {action} ignored")
-
-    def loadExif(self, imageKey: "ImageKey"):
+    def _loadExif(self, imageKey: "ImageKey"):
+        logger.debug(f"Loading date and thumbnail from exif for {imageKey}...")
         exif = self.exifTool.get_tags(
             [
                 "EXIF:ThumbnailImage",
@@ -96,7 +70,7 @@ class ExifLoader(BackgroundWorker):
             dateTime = (year, month, day, hour, minute, second)  # noqa
         else:
             dateTime = ('1970', '01', '01', '00', '00', '00')
-        self.publishDateTime(dateTime, imageKey)
+        self.publishData("datetime", imageKey, dateTime)
 
         try:
             imgstring = exif["EXIF:ThumbnailImage"]
@@ -136,9 +110,10 @@ class ExifLoader(BackgroundWorker):
             imgdata = base64.b64decode(imgstring)
             thumbData = (imgdata, aspectRatio, orientation)
 
-        self.publishThumbnail(thumbData, imageKey)
+        self.publishData("thumbnail", imageKey, thumbData)
 
-    def loadThumbnail(self, imageKey: "ImageKey"):
+    def _loadThumbnail(self, imageKey: "ImageKey"):
+        logger.debug(f"Loading thumbnail from exif for {imageKey}...")
         exif = self.exifTool.get_tags(
             [
                 "EXIF:ThumbnailImage",
@@ -190,9 +165,10 @@ class ExifLoader(BackgroundWorker):
             imgdata = base64.b64decode(imgstring)
             thumbData = (imgdata, aspectRatio, orientation)
 
-        self.publishThumbnail(thumbData, imageKey)
+        self.publishData("thumbnail", imageKey, thumbData)
 
-    def loadDatetime(self, imageKey: "ImageKey"):
+    def _loadDatetime(self, imageKey: "ImageKey"):
+        logger.debug(f"Loading date time from exif for {imageKey}...")
         dateTime = self.exifTool.get_tag("EXIF:DateTimeOriginal", imageKey)
         if dateTime:  # "YYYY:MM:DD HH:MM:SS"
             date, time_ = dateTime.split(" ", 1)
@@ -201,24 +177,4 @@ class ExifLoader(BackgroundWorker):
             dateTime = (year, month, day, hour, minute, second)  # noqa
         else:
             dateTime = ('1970', '01', '01', '00', '00', '00')
-        self.publishDateTime(dateTime, imageKey)
-
-    def publishDateTime(
-            self,
-            datetime: Tuple[str, str, str, str, str, str],
-            imageKey: "ImageKey"
-    ):
-        data = Message("datetime", (imageKey, datetime))
-        try:
-            self._conn.send(data)
-            logger.debug(f"Date time sent for image: {imageKey}")
-        except (OSError, EOFError, BrokenPipeError):
-            pass
-
-    def publishThumbnail(self, thumbnail: tuple, imageKey: "ImageKey"):
-        data = Message("thumbnail", (imageKey, thumbnail))
-        try:
-            self._conn.send(data)
-            logger.debug(f"Thumbnail sent for image: {imageKey}")
-        except (OSError, EOFError, BrokenPipeError):
-            pass
+        self.publishData("datetime", imageKey, dateTime)

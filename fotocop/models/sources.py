@@ -133,7 +133,9 @@ class Source:
         return s
 
     @classmethod
-    def fromLogicalDisk(cls, logicalDisk: LogicalDisk, path: Path, subDirs: bool = False):
+    def fromLogicalDisk(
+        cls, logicalDisk: LogicalDisk, path: Path, subDirs: bool = False
+    ):
         s = cls(logicalDisk)
         s.selectedPath = path
         s.subDirs = subDirs
@@ -221,9 +223,7 @@ class Source:
             logger.debug(f"Loading in progress: {name}")
         return None
 
-    def _getImageThumbnail(
-        self, imageKey: "ImageKey"
-    ) -> Tuple[bytes, float, int]:
+    def _getImageThumbnail(self, imageKey: "ImageKey") -> Tuple[bytes, float, int]:
         image = self._images[imageKey]
         name = image.name
         try:
@@ -586,19 +586,13 @@ class SourceManager(metaclass=Singleton):
                         or logicalDisk.Description
                     )
                     path = Path(f"{driveLetter}\\")
-                    self._devices[name] = Device(
-                        name, driveLetter, path, driveType
-                    )
+                    self._devices[name] = Device(name, driveLetter, path, driveType)
 
         self.sourcesChanged.emit()
         self._autoSourceSelect()
 
     def selectDevice(self, name: Optional[str], eject: bool = False):
-        if (
-            name is not None
-            and self.source.isDevice
-            and name == self.source.media.name
-        ):
+        if name is not None and self.source.isDevice and name == self.source.media.name:
             # this device is already the selected one: nothing to do.
             return
 
@@ -624,7 +618,9 @@ class SourceManager(metaclass=Singleton):
             self.sourceSelected.emit(self.source)
             self.imageSampleChanged.emit()
 
-    def selectLogicalDisk(self, driveId: Optional[str], path: Path, subDirs: bool = False):
+    def selectLogicalDisk(
+        self, driveId: Optional[str], path: Path, subDirs: bool = False
+    ):
         source = self.source
         if (
             driveId is not None

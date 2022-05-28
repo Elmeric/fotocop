@@ -3,6 +3,7 @@
 The FotocopSettings model defines the fotocop application settings and make them
 accessible throughout the application by exposing a fotocopSettings instance.
 """
+import os
 from typing import TYPE_CHECKING
 from pathlib import Path
 
@@ -68,9 +69,9 @@ class FotocopSettings(settings.Settings):
     windowSize: Setting = settings.Setting(defaultValue=(1600, 800))
     qtScaleFactor: Setting = settings.Setting(defaultValue="1.0")
 
-    def __init__(self) -> None:
+    def __init__(self, appName: str) -> None:
         # Retrieve or create the user directories for the application.
-        appDirs = settings.getAppDirs("fotocop")
+        appDirs = settings.getAppDirs(appName)
 
         super().__init__(appDirs.user_data_dir / "settings")
 
@@ -97,4 +98,7 @@ class FotocopSettings(settings.Settings):
             setattr(self, setting, defaultValue)
 
 
-fotocopSettings = FotocopSettings()
+if os.environ["FOTOCOP_DEV"]:
+    fotocopSettings = FotocopSettings("fotocop_dev")
+else:
+    fotocopSettings = FotocopSettings("fotocop")

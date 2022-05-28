@@ -98,7 +98,7 @@ class FotocopSettings(settings.Settings):
             setattr(self, setting, defaultValue)
 
 
-if os.environ["FOTOCOP_DEV"]:
+if os.environ.get("FOTOCOP_DEV", 0):
     fotocopSettings = FotocopSettings("fotocop_dev")
 else:
     fotocopSettings = FotocopSettings("fotocop")

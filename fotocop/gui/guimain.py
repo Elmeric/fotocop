@@ -593,6 +593,13 @@ def QtMain() -> None:
     a Qt Application and the application main view.
     Display a splash screen during application initialization and start the Qt main loop.
     """
+    # https://stackoverflow.com/questions/67599432/setting-the-same-icon-as-application-icon-in-task-bar-for-pyqt5-application
+    # import ctypes
+    # myappid = 'fotocop'  # arbitrary string
+    # ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    # or create HKEY_LOCAL_MACHINE\SOFTWARE\Classes\Applications\python.exe with an empty
+    # IsHostApp chain value
+
     # Retrieve the fotocop app settings.
     settings = Config.fotocopSettings
     resources = settings.resources

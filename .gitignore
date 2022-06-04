@@ -32,7 +32,7 @@ MANIFEST
 *.manifest
 *.spec
 *.ico
-file_version_info.txt
+# file_version_info.txt
 pyinstaller.bat
 pyinstaller.txt
 dist.zip
